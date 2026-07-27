@@ -91,7 +91,8 @@ enum class ComposePlatforms(vararg val alternativeNames: String) {
         val GENERATE_KLIB = WEB + LINUX_NATIVE + WINDOWS_NATIVE + DARWIN
 
         val SKIKO_SUPPORT =
-            EnumSet.of(KotlinMultiplatform) + JVM_BASED + IOS + MACOS_NATIVE + WEB
+            EnumSet.of(KotlinMultiplatform) + JVM_BASED + IOS + MACOS_NATIVE + WEB +
+                WINDOWS_NATIVE
 
         val ALL = EnumSet.allOf(ComposePlatforms::class.java)
 
