@@ -19,6 +19,7 @@
 package androidx.compose.ui.window
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.InternalComposeUiApi
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -48,6 +49,9 @@ import androidx.compose.ui.draganddrop.DragAndDropTransferData
 import androidx.compose.ui.platform.PlatformDragAndDropManager
 import androidx.compose.ui.platform.PlatformDragAndDropSource
 import androidx.compose.ui.platform.Win32ScreenReader
+import androidx.compose.ui.viewinterop.LocalInteropContainer
+import androidx.compose.ui.viewinterop.TrackInteropPlacementContainer
+import androidx.compose.ui.viewinterop.Win32InteropContainer
 import androidx.compose.ui.win32.Win32DropTarget
 import androidx.compose.ui.win32.startTextDrag
 import androidx.compose.ui.win32.Win32Event
@@ -158,6 +162,7 @@ import platform.windows.WM_XBUTTONDOWN
 import platform.windows.WM_XBUTTONUP
 import platform.windows.WNDCLASSEXW
 import platform.windows.WPARAM
+import platform.windows.WS_CLIPCHILDREN
 import platform.windows.WS_OVERLAPPEDWINDOW
 import platform.windows.XBUTTON1
 import platform.windows.XBUTTON2
@@ -325,6 +330,9 @@ private class ComposeWindow(
         }
     }
 
+    /** Hosts native child windows placed by [androidx.compose.ui.viewinterop.Win32View]. */
+    private var interopContainer: Win32InteropContainer? = null
+
     /** Shell drop target, registered once the window exists. */
     private var dropTarget: Win32DropTarget? = null
 
@@ -430,8 +438,14 @@ private class ComposeWindow(
         )
 
         scene.density = Density(windowScale(window))
+        interopContainer = Win32InteropContainer(window).also { it.startObserving() }
         scene.setContent {
-            content()
+            CompositionLocalProvider(LocalInteropContainer provides interopContainer!!) {
+                // Tracks where interop children sit in the draw order, so their z-order can follow.
+                interopContainer!!.TrackInteropPlacementContainer {
+                    content()
+                }
+            }
         }
 
         archComponentsOwner.enableSavedStateHandles()
@@ -694,6 +708,8 @@ private class ComposeWindow(
         if (isDisposed) return
         isDisposed = true
 
+        interopContainer?.stopObserving()
+        interopContainer = null
         dropTarget?.dispose()
         dropTarget = null
         ComposeWindows.unregister(this)
@@ -763,7 +779,9 @@ private fun createWindow(title: String, size: DpSize, selfRef: StableRef<*>): HW
     check(windowClass != 0.toUShort())
 
     val scale = systemScale()
-    val style = WS_OVERLAPPEDWINDOW
+    // WS_CLIPCHILDREN keeps our BitBlt out of the area covered by interop child windows; without
+    // it the surface paints over them every frame and they flicker.
+    val style = WS_OVERLAPPEDWINDOW or WS_CLIPCHILDREN
     // `size` describes the client area; `CreateWindowExW` takes the outer window size.
     val bounds = alloc<RECT>()
     bounds.left = 0
