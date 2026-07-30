@@ -36,11 +36,13 @@ import platform.windows.GlobalAlloc
 import platform.windows.GlobalLock
 import platform.windows.GlobalSize
 import platform.windows.GlobalUnlock
+import platform.windows.IsClipboardFormatAvailable
 import platform.windows.OpenClipboard
 import platform.windows.SetClipboardData
 import platform.windows.WCHARVar
 
 private const val CF_UNICODETEXT = 13u
+private const val CF_HDROP = 15u
 private const val GMEM_MOVEABLE = 0x2002u
 
 /** Win32 system clipboard, accessed through the OpenClipboard sequence. */
@@ -131,9 +133,20 @@ internal actual fun createPlatformClipboard(): Clipboard {
 }
 
 actual class ClipEntry internal constructor() {
-    // TODO https://youtrack.jetbrains.com/issue/CMP-1260/ClipboardManager.-Implement-getClip-getClipMetadata-setClip
+    /**
+     * What the entry holds, without reading it. The formats come from the clipboard's own format
+     * list via `IsClipboardFormatAvailable`, so asking costs nothing and reads nothing.
+     */
     actual val clipMetadata: ClipMetadata
-        get() = TODO("ClipMetadata is not implemented. Consider using nativeClipboard")
+        get() {
+            // A entry built in-process already knows what it carries.
+            plainText?.let { return plainTextClipMetadata() }
+            val mimeTypes = buildList {
+                if (IsClipboardFormatAvailable(CF_UNICODETEXT) != 0) add(MimeTypeText)
+                if (IsClipboardFormatAvailable(CF_HDROP) != 0) add(MimeTypeFileList)
+            }
+            return if (mimeTypes.isEmpty()) emptyClipMetadata() else ClipMetadata(mimeTypes)
+        }
 
     internal var plainText: String? = null
 
