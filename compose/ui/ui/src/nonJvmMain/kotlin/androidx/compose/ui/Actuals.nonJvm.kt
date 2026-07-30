@@ -18,8 +18,6 @@ package androidx.compose.ui
 
 import androidx.compose.ui.node.ModifierNodeElement
 import androidx.compose.ui.platform.InspectorInfo
-import kotlin.coroutines.CoroutineContext
-import kotlinx.coroutines.Dispatchers
 
 internal actual fun classKeyForObject(a: Any): Any {
     return a::class
@@ -33,5 +31,5 @@ internal actual fun InspectorInfo.tryPopulateReflectively(
 ) {
 }
 
-internal actual val PostDelayedDispatcher: CoroutineContext
-    get() = Dispatchers.Main
+// PostDelayedDispatcher is actualized per platform rather than here: Kotlin/Native has no
+// Dispatchers.Main for mingwX64, so the Windows target supplies its own message-loop dispatcher.

@@ -14,47 +14,61 @@
  * limitations under the License.
  */
 
+@file:OptIn(ExperimentalForeignApi::class)
+
 package androidx.compose.ui.window
 
 import androidx.compose.ui.platform.makeSynchronizedObject
 import androidx.compose.ui.platform.synchronized
 import kotlin.coroutines.CoroutineContext
+import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.convert
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Runnable
+import platform.windows.GetCurrentThreadId
+import platform.windows.PostThreadMessageW
+import platform.windows.WM_APP
+
+/** Private message that asks the UI thread to drain [Win32MainDispatcher]. */
+internal const val WM_COMPOSE_DISPATCH = WM_APP + 1
 
 /**
- * Confines coroutine dispatch to the thread that pumps a window's Win32 message loop.
+ * Confines coroutine dispatch to the thread that pumps the Win32 message loop — the role
+ * `Dispatchers.Main` plays on Android and Apple platforms, which Kotlin/Native does not provide
+ * for `mingwX64`.
  *
- * [androidx.compose.ui.platform.FrameRecomposer] requires a single-threaded
- * [kotlin.coroutines.ContinuationInterceptor] — the role `Dispatchers.Main` plays on Android and
- * Apple platforms. Kotlin/Native has no main dispatcher for `mingwX64`, and Windows has no
- * ambient run loop to attach one to: the message loop belongs to the application. So the window
- * owns the dispatcher, and posting a wake-up message is what hands work back to the loop.
- *
- * Work submitted from other threads (a background coroutine resuming on the UI thread, snapshot
- * apply notifications) is queued under [lock] and drained on the loop thread by [drain].
+ * Compose needs this in two places that outlive any single window:
+ * [androidx.compose.ui.platform.FrameRecomposer], which requires a single-threaded
+ * [kotlin.coroutines.ContinuationInterceptor], and `postDelayed`, which the layout system calls
+ * while a scene is still being constructed. So the dispatcher is process-wide and wakes the UI
+ * thread with a *thread* message rather than a window message: work can be queued before a window
+ * exists, and it still arrives on the right thread.
  */
-internal class Win32MainDispatcher : CoroutineDispatcher() {
+internal object Win32MainDispatcher : CoroutineDispatcher() {
     private val lock = makeSynchronizedObject(this)
     private var queue = ArrayDeque<Runnable>()
-    private var wakeUp: (() -> Unit)? = null
+
+    /** Id of the thread running the message loop; 0 until [bindToCurrentThread] is called. */
+    private var loopThreadId: UInt = 0u
 
     /**
-     * Installs the callback that asks the message loop to call [drain] — set once the window it
-     * posts to exists. Work dispatched before then stays queued; the window flushes the backlog
-     * when it installs its wake-up.
+     * Marks the calling thread as the one that pumps messages. Called by the message loop before
+     * it starts, so anything queued during start-up is delivered once it is running.
      */
-    fun setWakeUp(wakeUp: (() -> Unit)?) {
-        synchronized(lock) { this.wakeUp = wakeUp }
+    fun bindToCurrentThread() {
+        synchronized(lock) { loopThreadId = GetCurrentThreadId() }
     }
 
     override fun dispatch(context: CoroutineContext, block: Runnable) {
-        val wakeUp = synchronized(lock) {
+        val threadId = synchronized(lock) {
             queue.addLast(block)
-            this.wakeUp
+            loopThreadId
         }
-        // Outside the lock: `PostMessage` is thread-safe, and a task must never run holding it.
-        wakeUp?.invoke()
+        // Outside the lock: PostThreadMessage is thread-safe, and a task must never run holding it.
+        // A zero id means the loop has not started yet; it drains the backlog when it does.
+        if (threadId != 0u) {
+            PostThreadMessageW(threadId, WM_COMPOSE_DISPATCH.convert(), 0uL, 0L)
+        }
     }
 
     /**

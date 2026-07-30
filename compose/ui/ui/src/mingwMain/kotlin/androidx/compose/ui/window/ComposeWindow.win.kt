@@ -63,6 +63,7 @@ import kotlinx.cinterop.toLong
 import kotlinx.cinterop.wcstr
 import org.jetbrains.skia.Canvas
 import org.jetbrains.skiko.SkiaLayer
+import platform.posix.fflush
 import org.jetbrains.skiko.SkikoRenderDelegate
 import platform.windows.AdjustWindowRect
 import platform.windows.CREATESTRUCTW
@@ -92,7 +93,6 @@ import platform.windows.MK_XBUTTON1
 import platform.windows.MK_XBUTTON2
 import platform.windows.MSG
 import platform.windows.POINT
-import platform.windows.PostMessageW
 import platform.windows.PostQuitMessage
 import platform.windows.RECT
 import platform.windows.RegisterClassExW
@@ -115,7 +115,6 @@ import platform.windows.TranslateMessage
 import platform.windows.UINT
 import platform.windows.UpdateWindow
 import platform.windows.WHEEL_DELTA
-import platform.windows.WM_APP
 import platform.windows.WM_CHAR
 import platform.windows.WM_CLOSE
 import platform.windows.WM_DESTROY
@@ -189,12 +188,9 @@ private class ComposeWindow(
     private val _windowInfo = WindowInfoImpl().apply { isWindowFocused = true }
     private val archComponentsOwner = DefaultArchitectureComponentsOwner()
 
-    /** Confines Compose's dispatch to the thread running [runMessageLoop]. */
-    private val mainDispatcher = Win32MainDispatcher()
-
     // TODO: It must be shared between Compose instances.
     //  It's supposed to be stored in platform's root view or window.
-    private val frameRecomposer = FrameRecomposer(mainDispatcher) { skiaLayer.needRender() }
+    private val frameRecomposer = FrameRecomposer(Win32MainDispatcher) { skiaLayer.needRender() }
 
     // TODO: It cannot be used in case of shared [FrameRecomposer], replace this helper with calling
     //  - [frameRecomposer.performFrame] once per frame (across all instances)
@@ -236,12 +232,19 @@ private class ComposeWindow(
 
     private val renderDelegate = object : SkikoRenderDelegate {
         override fun onRender(canvas: Canvas, width: Int, height: Int, nanoTime: Long) {
-            val sizeInPx = IntSize(width, height)
-            _windowInfo.containerSize = sizeInPx
-            _windowInfo.containerDpSize = sizeInPx.toSize().toDpSize(scene.density)
-            scene.size = sizeInPx // TODO: Move it out from onRender to avoid extra invalidation
-            with(sceneRenderingScope) {
-                scene.render(frameRecomposer, canvas.asComposeCanvas(), nanoTime)
+            // Rendering runs inside skiko's window procedure, which is a C callback: an exception
+            // that escaped it would reach the Win32 dispatcher and Windows would kill the process
+            // with STATUS_FATAL_USER_CALLBACK_EXCEPTION and no diagnostic at all.
+            try {
+                val sizeInPx = IntSize(width, height)
+                _windowInfo.containerSize = sizeInPx
+                _windowInfo.containerDpSize = sizeInPx.toSize().toDpSize(scene.density)
+                scene.size = sizeInPx // TODO: Move it out from onRender to avoid extra invalidation
+                with(sceneRenderingScope) {
+                    scene.render(frameRecomposer, canvas.asComposeCanvas(), nanoTime)
+                }
+            } catch (throwable: Throwable) {
+                reportRenderFailure(throwable)
             }
         }
     }
@@ -258,11 +261,6 @@ private class ComposeWindow(
         skiaLayer.renderDelegate = renderDelegate
         skiaLayer.attachTo(window) // Subclasses the window procedure, so create the window first.
 
-        // Only now can queued dispatches reach the loop; flush whatever the recomposer queued
-        // while the window did not exist yet.
-        mainDispatcher.setWakeUp { PostMessageW(window, WM_COMPOSE_DISPATCH.convert(), 0uL, 0L) }
-        requestDispatch()
-
         scene.density = Density(skiaLayer.contentScale)
         scene.setContent {
             content()
@@ -278,11 +276,21 @@ private class ComposeWindow(
 
     /** Pumps messages until [WM_DESTROY] posts `WM_QUIT`. */
     fun runMessageLoop() = memScoped {
+        // Claim this thread for Compose's dispatcher, then run whatever was queued while the
+        // window was being constructed.
+        Win32MainDispatcher.bindToCurrentThread()
+        Win32MainDispatcher.drain()
+
         val msg = alloc<MSG>()
         // `GetMessageW` returns 0 on WM_QUIT and -1 on error; both end the loop.
         while (GetMessageW(msg.ptr, null, 0u, 0u) > 0) {
-            TranslateMessage(msg.ptr)
-            DispatchMessageW(msg.ptr)
+            // Thread messages have no window, so DispatchMessage would silently drop them.
+            if (msg.hwnd == null && msg.message.toInt() == WM_COMPOSE_DISPATCH) {
+                Win32MainDispatcher.drain()
+            } else {
+                TranslateMessage(msg.ptr)
+                DispatchMessageW(msg.ptr)
+            }
         }
     }
 
@@ -296,10 +304,6 @@ private class ComposeWindow(
         }
     }
 
-    private fun requestDispatch() {
-        PostMessageW(window, WM_COMPOSE_DISPATCH.convert(), 0uL, 0L)
-    }
-
     /**
      * Returns the message result, or null to let `DefWindowProcW` handle the message.
      */
@@ -311,10 +315,6 @@ private class ComposeWindow(
         }
         if (isDisposed) return null
         return when (message.toInt()) {
-            WM_COMPOSE_DISPATCH -> {
-                mainDispatcher.drain()
-                0
-            }
             WM_MOUSEMOVE -> {
                 onMouseMove(wParam, lParam)
                 0
@@ -525,7 +525,6 @@ private class ComposeWindow(
 
         archComponentsOwner.lifecycle.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
         archComponentsOwner.viewModelStore.clear()
-        mainDispatcher.setWakeUp(null)
         skiaLayer.detach()
         scene.close()
         frameRecomposer.close()
@@ -535,8 +534,28 @@ private class ComposeWindow(
     }
 }
 
-/** Private message that asks the loop thread to drain [Win32MainDispatcher]. */
-private const val WM_COMPOSE_DISPATCH = WM_APP + 1
+/**
+ * Reports a failure raised while rendering a frame. Only the first one is printed in full: a
+ * broken composition repeats on every frame, and a repainting window would otherwise fill the
+ * console with the same stack trace.
+ */
+private var hasReportedRenderFailure = false
+
+private fun reportRenderFailure(throwable: Throwable) {
+    if (hasReportedRenderFailure) return
+    hasReportedRenderFailure = true
+    reportFailure("Exception while rendering a Compose frame:", throwable)
+}
+
+/**
+ * Prints a failure and flushes immediately. Diagnostics from a window procedure are worth nothing
+ * buffered: if the process is torn down by Windows, whatever is still in the stdio buffers is lost.
+ */
+private fun reportFailure(message: String, throwable: Throwable) {
+    println(message)
+    throwable.printStackTrace()
+    fflush(null)
+}
 
 private const val WINDOW_CLASS_NAME = "AndroidxComposeWindow"
 
@@ -608,6 +627,25 @@ private fun systemScale(): Float {
 }
 
 private fun composeWindowProc(
+    hwnd: HWND?,
+    message: UINT,
+    wParam: WPARAM,
+    lParam: LPARAM,
+): LRESULT = try {
+    dispatchWindowMessage(hwnd, message, wParam, lParam)
+} catch (throwable: Throwable) {
+    // A Kotlin exception must never unwind into the Win32 message dispatcher: it crosses a C
+    // callback frame, so Windows kills the process with STATUS_FATAL_USER_CALLBACK_EXCEPTION and
+    // no diagnostic at all. Report it here, where a stack trace is still available, and let the
+    // system handle the message so the window stays responsive.
+    reportFailure(
+        "Exception in the Compose window procedure (message 0x${message.toString(16)}):",
+        throwable,
+    )
+    DefWindowProcW(hwnd, message, wParam, lParam)
+}
+
+private fun dispatchWindowMessage(
     hwnd: HWND?,
     message: UINT,
     wParam: WPARAM,
