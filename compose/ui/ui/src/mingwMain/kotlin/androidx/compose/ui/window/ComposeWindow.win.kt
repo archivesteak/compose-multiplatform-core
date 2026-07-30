@@ -42,6 +42,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.toDpSize
 import androidx.compose.ui.unit.toSize
 import androidx.compose.ui.win32.Win32Event
+import androidx.compose.ui.win32.markProcessDpiAware
+import androidx.compose.ui.win32.systemScale
+import androidx.compose.ui.win32.windowScale
 import androidx.compose.ui.win32.win32KeyboardModifiers
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.enableSavedStateHandles
@@ -156,11 +159,38 @@ interface WindowScope {
 }
 
 /**
- * Shows a window hosting [content] and pumps its Win32 message loop until the window is closed.
+ * Runs a Compose application: opens whatever windows [content] creates, then pumps the Win32
+ * message loop until the last of them closes.
  *
- * The call blocks for the lifetime of the window. Unlike AppKit, Windows has no framework-owned
- * run loop to hand control to — the message loop belongs to the application thread — so the loop
- * runs here, and the window is torn down before returning.
+ * Unlike AppKit there is no framework-owned run loop to hand control to — the message loop belongs
+ * to the application thread — so it runs here, and every window is torn down before returning.
+ * Open more than one window by calling [Window] more than once:
+ *
+ * ```
+ * fun main() = application {
+ *     Window(title = "Editor") { EditorContent() }
+ *     Window(title = "Inspector", size = DpSize(320.dp, 600.dp)) { InspectorContent() }
+ * }
+ * ```
+ */
+fun application(content: () -> Unit) {
+    check(!ComposeWindows.isApplicationScope) { "application { } is already running" }
+    ComposeWindows.isApplicationScope = true
+    try {
+        content()
+        pumpMessages()
+    } finally {
+        ComposeWindows.isApplicationScope = false
+        ComposeWindows.destroyAll()
+    }
+}
+
+/**
+ * Shows a window hosting [content].
+ *
+ * Inside [application] this returns as soon as the window is on screen, so further windows can be
+ * opened. Called on its own it is the whole application: it pumps the message loop itself and
+ * returns once the window is closed.
  *
  * @param title text shown in the window's title bar.
  * @param size initial size of the *client* area, in density-independent pixels.
@@ -171,13 +201,67 @@ fun Window(
     content: @Composable WindowScope.() -> Unit,
 ) {
     val window = ComposeWindow(title = title, size = size, content = content)
+    if (ComposeWindows.isApplicationScope) return
     try {
-        window.runMessageLoop()
+        pumpMessages()
     } finally {
         // A no-op on the normal path: closing the window already ran the teardown. This covers
         // leaving the loop through an exception thrown out of the content.
         window.destroy()
     }
+}
+
+/**
+ * Every window this process has open, so the message loop knows when the last one has gone.
+ *
+ * Kotlin/Native runs Compose on the single thread that pumps messages, so this needs no locking.
+ */
+private object ComposeWindows {
+    private val open = mutableSetOf<ComposeWindow>()
+
+    /** True inside [application], where [Window] must return instead of pumping messages. */
+    var isApplicationScope = false
+
+    /** True while [pumpMessages] is running, so closing the last window can end it. */
+    var isPumping = false
+
+    fun register(window: ComposeWindow) {
+        open.add(window)
+    }
+
+    fun unregister(window: ComposeWindow) {
+        if (open.remove(window) && open.isEmpty() && isPumping) {
+            // The last window has gone: let the message loop finish.
+            PostQuitMessage(0)
+        }
+    }
+
+    fun destroyAll() {
+        // Copied first: destroying a window unregisters it.
+        open.toList().forEach(ComposeWindow::destroy)
+    }
+}
+
+/** Pumps messages until the last window closes. */
+private fun pumpMessages() = memScoped {
+    ComposeWindows.isPumping = true
+    // Claim this thread for Compose's dispatcher, then run whatever was queued while the windows
+    // were being constructed.
+    Win32MainDispatcher.bindToCurrentThread()
+    Win32MainDispatcher.drain()
+
+    val msg = alloc<MSG>()
+    // `GetMessageW` returns 0 on WM_QUIT and -1 on error; both end the loop.
+    while (GetMessageW(msg.ptr, null, 0u, 0u) > 0) {
+        // Thread messages have no window, so DispatchMessage would silently drop them.
+        if (msg.hwnd == null && msg.message.toInt() == WM_COMPOSE_DISPATCH) {
+            Win32MainDispatcher.drain()
+        } else {
+            TranslateMessage(msg.ptr)
+            DispatchMessageW(msg.ptr)
+        }
+    }
+    ComposeWindows.isPumping = false
 }
 
 private class ComposeWindow(
@@ -267,7 +351,9 @@ private class ComposeWindow(
         // IMM32 calls need the window that owns the input context.
         textInputService.window = window
 
-        scene.density = Density(skiaLayer.contentScale)
+        ComposeWindows.register(this)
+
+        scene.density = Density(windowScale(window))
         scene.setContent {
             content()
         }
@@ -278,26 +364,6 @@ private class ComposeWindow(
 
         ShowWindow(window, SW_SHOWNORMAL)
         UpdateWindow(window)
-    }
-
-    /** Pumps messages until [WM_DESTROY] posts `WM_QUIT`. */
-    fun runMessageLoop() = memScoped {
-        // Claim this thread for Compose's dispatcher, then run whatever was queued while the
-        // window was being constructed.
-        Win32MainDispatcher.bindToCurrentThread()
-        Win32MainDispatcher.drain()
-
-        val msg = alloc<MSG>()
-        // `GetMessageW` returns 0 on WM_QUIT and -1 on error; both end the loop.
-        while (GetMessageW(msg.ptr, null, 0u, 0u) > 0) {
-            // Thread messages have no window, so DispatchMessage would silently drop them.
-            if (msg.hwnd == null && msg.message.toInt() == WM_COMPOSE_DISPATCH) {
-                Win32MainDispatcher.drain()
-            } else {
-                TranslateMessage(msg.ptr)
-                DispatchMessageW(msg.ptr)
-            }
-        }
     }
 
     /**
@@ -417,7 +483,8 @@ private class ComposeWindow(
                 0
             }
             WM_DESTROY -> {
-                PostQuitMessage(0)
+                // Not PostQuitMessage: with several windows open the loop must outlive this one.
+                // ComposeWindows ends it when the last window is unregistered.
                 0
             }
             else -> null
@@ -502,7 +569,8 @@ private class ComposeWindow(
                 (SWP_NOZORDER or SWP_NOACTIVATE).convert(),
             )
         }
-        scene.density = Density(skiaLayer.contentScale)
+        // The window moved to a monitor with a different DPI, so the content rescales.
+        scene.density = Density(windowScale(window))
     }
 
     private fun sendPointerEvent(
@@ -550,6 +618,7 @@ private class ComposeWindow(
         if (isDisposed) return
         isDisposed = true
 
+        ComposeWindows.unregister(this)
         archComponentsOwner.lifecycle.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
         archComponentsOwner.viewModelStore.clear()
         skiaLayer.detach()
@@ -590,11 +659,9 @@ private const val WINDOW_CLASS_NAME = "AndroidxComposeWindow"
 private val windowClass: UShort by lazy { registerWindowClass() }
 
 private fun registerWindowClass(): UShort = memScoped {
-    // Must precede the first window: it decides whether Windows scales the window for us or
-    // hands us physical pixels. System awareness is what skiko's `contentScale` reports, since
-    // `GetDpiForWindow` is absent from the Kotlin/Native Windows klib.
-    // TODO: Move to per-monitor-v2 awareness once skiko can report per-window DPI.
-    SetProcessDPIAware()
+    // Must precede the first window: it decides whether Windows scales the window for us or hands
+    // us real pixels, and whether WM_DPICHANGED is delivered at all.
+    markProcessDpiAware()
 
     val windowClass = alloc<WNDCLASSEXW>()
     windowClass.cbSize = sizeOf<WNDCLASSEXW>().convert()
@@ -643,14 +710,6 @@ private fun createWindow(title: String, size: DpSize, selfRef: StableRef<*>): HW
         lpParam = selfRef.asCPointer(),
     )
     checkNotNull(hwnd) { "CreateWindowExW failed: ${GetLastError()}" }
-}
-
-/** System DPI as a scale factor, read before any window exists. */
-private fun systemScale(): Float {
-    val screenDc = GetDC(null) ?: return 1f
-    val dpi = GetDeviceCaps(screenDc, LOGPIXELSY)
-    ReleaseDC(null, screenDc)
-    return if (dpi > 0) dpi / 96f else 1f
 }
 
 private fun composeWindowProc(
