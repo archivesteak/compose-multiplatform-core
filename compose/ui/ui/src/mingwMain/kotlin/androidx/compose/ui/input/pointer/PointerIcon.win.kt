@@ -18,8 +18,8 @@
 
 package androidx.compose.ui.input.pointer
 
-import kotlinx.cinterop.CPointed
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.UShortVar
 import kotlinx.cinterop.toCPointer
 import platform.windows.HCURSOR
 import platform.windows.LoadCursorW
@@ -27,8 +27,9 @@ import platform.windows.LoadCursorW
 internal data class Win32Cursor(val cursor: HCURSOR?) : PointerIcon
 
 // System cursor resource ids (IDC_*); loaded once from the system, not
-// destroyed (shared cursors owned by the OS).
-private fun systemCursor(id: Long): HCURSOR? = LoadCursorW(null, id.toCPointer<CPointed>())
+// destroyed (shared cursors owned by the OS). The id is passed in place of a
+// name pointer, the way the MAKEINTRESOURCE macro does.
+private fun systemCursor(id: Long): HCURSOR? = LoadCursorW(null, id.toCPointer<UShortVar>())
 
 private val arrowCursor by lazy { Win32Cursor(systemCursor(32512)) }      // IDC_ARROW
 private val crosshairCursor by lazy { Win32Cursor(systemCursor(32515)) }  // IDC_CROSS

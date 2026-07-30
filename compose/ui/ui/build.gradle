@@ -206,7 +206,8 @@ androidXMultiplatform {
                 api(libs.skiko)
                 implementation(libs.atomicFu)
 
-                implementation("org.jetbrains.androidx.navigationevent:navigationevent-compose:1.1.0")
+                // mingwX64 has no published navigationevent-compose artifact; build from source
+                implementation(project(":navigationevent:navigationevent-compose"))
                 implementation("androidx.lifecycle:lifecycle-viewmodel-compose:$lifecycleVersion")
                 implementation("androidx.lifecycle:lifecycle-viewmodel-savedstate:$lifecycleVersion")
             }

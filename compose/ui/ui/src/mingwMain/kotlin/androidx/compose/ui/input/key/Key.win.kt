@@ -553,6 +553,24 @@ actual value class Key(val keyCode: Long) {
         actual val NumPadEquals = Key(146)
         actual val NumPadLeftParenthesis = Key(0)
         actual val NumPadRightParenthesis = Key(0)
+
+        // Keys with no Win32 virtual-key code of their own. The numeric keypad's navigation
+        // function (NumLock off) reuses the virtual keys of the dedicated navigation block and is
+        // told apart only by the extended-key flag, which the key code cannot carry. These use the
+        // same synthetic codes as the other Kotlin/Native targets, so `Key` identity matches.
+        actual val NumPadDirectionUp = Key(-1000000198)
+        actual val NumPadDirectionDown = Key(-1000000199)
+        actual val NumPadDirectionLeft = Key(-1000000200)
+        actual val NumPadDirectionRight = Key(-1000000201)
+        actual val NumPadMoveHome = Key(-1000000202)
+        actual val NumPadMoveEnd = Key(-1000000203)
+        actual val NumPadPageUp = Key(-1000000204)
+        actual val NumPadPageDown = Key(-1000000205)
+        actual val NumPadInsert = Key(-1000000206)
+        actual val NumPadDelete = Key(-1000000208)
+
+        /** Android's system home button; Windows has no counterpart. */
+        actual val SystemHome = Key(-1000000207)
     }
 
     actual override fun toString() = "Key keyCode: $keyCode"

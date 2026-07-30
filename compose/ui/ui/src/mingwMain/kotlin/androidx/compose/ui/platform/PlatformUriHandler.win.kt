@@ -14,6 +14,19 @@
  * limitations under the License.
  */
 
-package androidx.compose.ui.input.pointer.util
+@file:OptIn(ExperimentalForeignApi::class)
 
-internal actual fun PlatformVelocityTracker(): PlatformVelocityTracker = Lsq2VelocityTracker()
+package androidx.compose.ui.platform
+
+import kotlinx.cinterop.ExperimentalForeignApi
+import platform.windows.SW_SHOWNORMAL
+import platform.windows.ShellExecuteW
+
+private class Win32UriHandler : UriHandler {
+    override fun openUri(uri: String) {
+        // A null verb lets the shell pick the default association for the scheme.
+        ShellExecuteW(null, null, uri, null, null, SW_SHOWNORMAL)
+    }
+}
+
+internal actual fun createPlatformUriHandler(): UriHandler = Win32UriHandler()

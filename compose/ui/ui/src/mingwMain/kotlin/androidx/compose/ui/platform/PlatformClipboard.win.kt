@@ -19,12 +19,14 @@
 package androidx.compose.ui.platform
 
 import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.text.AnnotatedString
 import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.allocArray
 import kotlinx.cinterop.convert
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.pointed
+import kotlinx.cinterop.set
 import kotlinx.cinterop.toKStringFromUtf16
 import kotlinx.cinterop.value
 import platform.windows.CloseClipboard
@@ -98,6 +100,30 @@ internal class Win32PlatformClipboard : Clipboard {
 
     override val nativeClipboard: NativeClipboard
         get() = NativeClipboard()
+}
+
+@Suppress("DEPRECATION")
+private class Win32PlatformClipboardManager : ClipboardManager {
+    private val clipboard = NativeClipboard()
+
+    override fun getText(): AnnotatedString? = clipboard.getText()?.let(::AnnotatedString)
+
+    override fun setText(annotatedString: AnnotatedString) {
+        clipboard.setText(annotatedString.text)
+    }
+
+    override fun hasText(): Boolean = !clipboard.getText().isNullOrEmpty()
+
+    // TODO https://youtrack.jetbrains.com/issue/CMP-1260/ClipboardManager.-Implement-getClip-getClipMetadata-setClip
+    override fun getClip(): ClipEntry? = null
+
+    @Suppress("GetterSetterNames")
+    override fun setClip(clipEntry: ClipEntry?) = Unit
+}
+
+@Suppress("DEPRECATION")
+internal actual fun createPlatformClipboardManager(): ClipboardManager {
+    return Win32PlatformClipboardManager()
 }
 
 internal actual fun createPlatformClipboard(): Clipboard {
