@@ -27,7 +27,7 @@ import androidx.compose.ui.input.pointer.PointerButton
 import androidx.compose.ui.input.pointer.PointerButtons
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
-import androidx.compose.ui.input.pointer.Win32Cursor
+import androidx.compose.ui.input.pointer.win32CursorOrDefault
 import androidx.compose.ui.platform.DefaultArchitectureComponentsOwner
 import androidx.compose.ui.platform.FrameRecomposer
 import androidx.compose.ui.platform.PlatformContext
@@ -121,6 +121,9 @@ import platform.windows.WM_DESTROY
 import platform.windows.WM_DPICHANGED
 import platform.windows.WM_KEYDOWN
 import platform.windows.WM_KEYUP
+import platform.windows.WM_IME_COMPOSITION
+import platform.windows.WM_IME_ENDCOMPOSITION
+import platform.windows.WM_IME_STARTCOMPOSITION
 import platform.windows.WM_KILLFOCUS
 import platform.windows.WM_LBUTTONDOWN
 import platform.windows.WM_LBUTTONUP
@@ -213,7 +216,7 @@ private class ComposeWindow(
             override val textInputService get() = this@ComposeWindow.textInputService
 
             override fun setPointerIcon(pointerIcon: PointerIcon) {
-                cursor = (pointerIcon as? Win32Cursor)?.cursor
+                cursor = pointerIcon.win32CursorOrDefault()
                 // Apply immediately; `WM_SETCURSOR` only fires on the next mouse move.
                 SetCursor(cursor)
             }
@@ -260,6 +263,9 @@ private class ComposeWindow(
     init {
         skiaLayer.renderDelegate = renderDelegate
         skiaLayer.attachTo(window) // Subclasses the window procedure, so create the window first.
+
+        // IMM32 calls need the window that owns the input context.
+        textInputService.window = window
 
         scene.density = Density(skiaLayer.contentScale)
         scene.setContent {
@@ -362,6 +368,27 @@ private class ComposeWindow(
                 // Unconsumed keys fall through to the system, so Alt+F4, menu mnemonics and the
                 // system keys keep working.
                 if (scene.sendKeyEvent(win32KeyEvent(message, wParam, lParam))) 0 else null
+            }
+            WM_IME_STARTCOMPOSITION -> {
+                if (textInputService.isInputActive) {
+                    textInputService.onImeStartComposition()
+                    // Consume it: Compose draws the composition inline, so the IME must not open
+                    // its own composition window on top of the text field.
+                    0
+                } else {
+                    null
+                }
+            }
+            WM_IME_COMPOSITION -> {
+                if (textInputService.onImeComposition(lParam)) 0 else null
+            }
+            WM_IME_ENDCOMPOSITION -> {
+                if (textInputService.isInputActive) {
+                    textInputService.onImeEndComposition()
+                    0
+                } else {
+                    null
+                }
             }
             WM_SETFOCUS -> {
                 _windowInfo.isWindowFocused = true

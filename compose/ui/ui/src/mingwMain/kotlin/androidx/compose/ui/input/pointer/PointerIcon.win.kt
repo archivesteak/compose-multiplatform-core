@@ -26,17 +26,79 @@ import platform.windows.LoadCursorW
 
 internal data class Win32Cursor(val cursor: HCURSOR?) : PointerIcon
 
-// System cursor resource ids (IDC_*); loaded once from the system, not
-// destroyed (shared cursors owned by the OS). The id is passed in place of a
-// name pointer, the way the MAKEINTRESOURCE macro does.
-private fun systemCursor(id: Long): HCURSOR? = LoadCursorW(null, id.toCPointer<UShortVar>())
+/**
+ * Creates a [PointerIcon] from a Win32 cursor handle, the counterpart of the JVM desktop target's
+ * `PointerIcon(java.awt.Cursor)`. Use it with [Win32Cursors] for the stock shapes, or with a
+ * handle of your own from `LoadCursorW`/`LoadImageW`/`CreateIconIndirect`.
+ *
+ * The handle is not owned by Compose: shared system cursors must not be destroyed, and a custom
+ * one has to outlive every frame that shows it.
+ */
+fun PointerIcon(cursor: HCURSOR): PointerIcon = Win32Cursor(cursor)
 
-private val arrowCursor by lazy { Win32Cursor(systemCursor(32512)) }      // IDC_ARROW
-private val crosshairCursor by lazy { Win32Cursor(systemCursor(32515)) }  // IDC_CROSS
-private val ibeamCursor by lazy { Win32Cursor(systemCursor(32513)) }      // IDC_IBEAM
-private val handCursor by lazy { Win32Cursor(systemCursor(32649)) }       // IDC_HAND
+/**
+ * The stock Windows cursors, loaded on first use. These are the shared `IDC_*` cursors owned by
+ * the system, so they are never destroyed.
+ */
+object Win32Cursors {
+    /** `IDC_ARROW` */
+    val Arrow: PointerIcon by lazy { systemPointerIcon(IDC_ARROW) }
+    /** `IDC_IBEAM` */
+    val IBeam: PointerIcon by lazy { systemPointerIcon(IDC_IBEAM) }
+    /** `IDC_CROSS` */
+    val Crosshair: PointerIcon by lazy { systemPointerIcon(IDC_CROSS) }
+    /** `IDC_HAND` */
+    val Hand: PointerIcon by lazy { systemPointerIcon(IDC_HAND) }
+    /** `IDC_WAIT` — the whole application is busy. */
+    val Wait: PointerIcon by lazy { systemPointerIcon(IDC_WAIT) }
+    /** `IDC_APPSTARTING` — busy, but the UI still accepts input. */
+    val AppStarting: PointerIcon by lazy { systemPointerIcon(IDC_APPSTARTING) }
+    /** `IDC_HELP` */
+    val Help: PointerIcon by lazy { systemPointerIcon(IDC_HELP) }
+    /** `IDC_NO` — the drop or action is not allowed here. */
+    val No: PointerIcon by lazy { systemPointerIcon(IDC_NO) }
+    /** `IDC_SIZEALL` — move, or pan in any direction. */
+    val ResizeAll: PointerIcon by lazy { systemPointerIcon(IDC_SIZEALL) }
+    /** `IDC_SIZENS` — resize vertically. */
+    val ResizeNorthSouth: PointerIcon by lazy { systemPointerIcon(IDC_SIZENS) }
+    /** `IDC_SIZEWE` — resize horizontally. */
+    val ResizeWestEast: PointerIcon by lazy { systemPointerIcon(IDC_SIZEWE) }
+    /** `IDC_SIZENESW` — resize along the ↗↙ diagonal. */
+    val ResizeNorthEastSouthWest: PointerIcon by lazy { systemPointerIcon(IDC_SIZENESW) }
+    /** `IDC_SIZENWSE` — resize along the ↖↘ diagonal. */
+    val ResizeNorthWestSouthEast: PointerIcon by lazy { systemPointerIcon(IDC_SIZENWSE) }
+    /** `IDC_UPARROW` */
+    val UpArrow: PointerIcon by lazy { systemPointerIcon(IDC_UPARROW) }
+}
 
-internal actual val pointerIconDefault: PointerIcon get() = arrowCursor
-internal actual val pointerIconCrosshair: PointerIcon get() = crosshairCursor
-internal actual val pointerIconText: PointerIcon get() = ibeamCursor
-internal actual val pointerIconHand: PointerIcon get() = handCursor
+// The IDC_* macros are integers passed where a name pointer is expected, the way MAKEINTRESOURCE
+// does it. They are not in the Kotlin/Native Windows klib, so they are spelled out here.
+private const val IDC_ARROW = 32512L
+private const val IDC_IBEAM = 32513L
+private const val IDC_WAIT = 32514L
+private const val IDC_CROSS = 32515L
+private const val IDC_UPARROW = 32516L
+private const val IDC_SIZENWSE = 32642L
+private const val IDC_SIZENESW = 32643L
+private const val IDC_SIZEWE = 32644L
+private const val IDC_SIZENS = 32645L
+private const val IDC_SIZEALL = 32646L
+private const val IDC_NO = 32648L
+private const val IDC_HAND = 32649L
+private const val IDC_APPSTARTING = 32650L
+private const val IDC_HELP = 32651L
+
+private fun systemPointerIcon(id: Long): PointerIcon =
+    Win32Cursor(LoadCursorW(null, id.toCPointer<UShortVar>()))
+
+/**
+ * The handle to hand to `SetCursor`, falling back to the arrow for a [PointerIcon] that did not
+ * come from this platform — passing null would hide the cursor instead.
+ */
+internal fun PointerIcon.win32CursorOrDefault(): HCURSOR? =
+    (this as? Win32Cursor)?.cursor ?: (Win32Cursors.Arrow as Win32Cursor).cursor
+
+internal actual val pointerIconDefault: PointerIcon get() = Win32Cursors.Arrow
+internal actual val pointerIconCrosshair: PointerIcon get() = Win32Cursors.Crosshair
+internal actual val pointerIconText: PointerIcon get() = Win32Cursors.IBeam
+internal actual val pointerIconHand: PointerIcon get() = Win32Cursors.Hand
