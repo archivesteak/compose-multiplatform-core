@@ -19,6 +19,7 @@ package org.jetbrains.androidx.build
 import androidx.build.AndroidXMultiplatformExtension
 import androidx.build.PlatformIdentifier
 import androidx.build.configurePinnedKotlinLibraries
+import androidx.build.enableMac
 import androidx.build.multiplatformExtension
 import org.gradle.api.Action
 import org.gradle.api.Project
@@ -182,6 +183,10 @@ fun configureDarwinFlags(project: Project) {
  * Configure instrumented tests to run on an actual iOS simulator.
  */
 fun addIosInstrumentedTestSourceset(project: Project) {
+    // The iOS targets are only created when the MAC platform group is enabled
+    // (see AndroidXMultiplatformExtension.iosSimulatorArm64), so there is nothing to attach the
+    // instrumented test compilation to otherwise.
+    if (!project.enableMac()) return
     project.multiplatformExtension!!.run {
         val iosInstrumentedTest = sourceSets.create("iosInstrumentedTest")
         iosInstrumentedTest.kotlin.srcDir("src/uikitInstrumentedTest/kotlin")
