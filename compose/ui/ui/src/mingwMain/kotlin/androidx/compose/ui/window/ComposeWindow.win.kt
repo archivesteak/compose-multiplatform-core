@@ -41,6 +41,8 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.toDpSize
 import androidx.compose.ui.unit.toSize
+import androidx.compose.ui.draganddrop.DragAndDropEvent
+import androidx.compose.ui.win32.Win32DropTarget
 import androidx.compose.ui.win32.Win32Event
 import androidx.compose.ui.win32.markProcessDpiAware
 import androidx.compose.ui.win32.systemScale
@@ -95,6 +97,7 @@ import platform.windows.MK_RBUTTON
 import platform.windows.MK_XBUTTON1
 import platform.windows.MK_XBUTTON2
 import platform.windows.MSG
+import platform.windows.OleInitialize
 import platform.windows.POINT
 import platform.windows.PostQuitMessage
 import platform.windows.RECT
@@ -285,6 +288,12 @@ private class ComposeWindow(
     //  - [scene.draw] during the drawing phase
     private val sceneRenderingScope = SingleComposeSceneRenderingScope { skiaLayer.needRender() }
 
+    /** Shell drop target, registered once the window exists. */
+    private var dropTarget: Win32DropTarget? = null
+
+    /** Last event seen from the shell, so leave/end can be reported with a position. */
+    private var lastDragEvent: DragAndDropEvent? = null
+
     /** Cursor for the client area, applied on every `WM_SETCURSOR`. */
     private var cursor: HCURSOR? = null
 
@@ -352,6 +361,34 @@ private class ComposeWindow(
         textInputService.window = window
 
         ComposeWindows.register(this)
+
+        // Accept files and text dropped from the shell.
+        OleInitialize(null)
+        dropTarget = Win32DropTarget(
+            hwnd = window,
+            onDragEnter = { event ->
+                lastDragEvent = event
+                scene.rootDragAndDropNode.acceptDragAndDropTransfer(event).also { accepted ->
+                    if (accepted) {
+                        scene.rootDragAndDropNode.onStarted(event)
+                        scene.rootDragAndDropNode.onEntered(event)
+                    }
+                }
+            },
+            onDragOver = { event ->
+                lastDragEvent = event
+                scene.rootDragAndDropNode.onMoved(event)
+            },
+            onDragLeave = {
+                scene.rootDragAndDropNode.onExited(lastDragEvent ?: return@Win32DropTarget)
+                scene.rootDragAndDropNode.onEnded(lastDragEvent ?: return@Win32DropTarget)
+            },
+            onDrop = { event ->
+                scene.rootDragAndDropNode.onDrop(event).also {
+                    scene.rootDragAndDropNode.onEnded(event)
+                }
+            },
+        )
 
         scene.density = Density(windowScale(window))
         scene.setContent {
@@ -618,6 +655,8 @@ private class ComposeWindow(
         if (isDisposed) return
         isDisposed = true
 
+        dropTarget?.dispose()
+        dropTarget = null
         ComposeWindows.unregister(this)
         archComponentsOwner.lifecycle.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
         archComponentsOwner.viewModelStore.clear()
