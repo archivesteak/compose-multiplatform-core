@@ -21,6 +21,8 @@ package androidx.compose.ui.window
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.InternalComposeUiApi
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.asComposeCanvas
 import androidx.compose.ui.input.key.win32KeyEvent
 import androidx.compose.ui.input.pointer.PointerButton
@@ -42,7 +44,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.toDpSize
 import androidx.compose.ui.unit.toSize
 import androidx.compose.ui.draganddrop.DragAndDropEvent
+import androidx.compose.ui.draganddrop.DragAndDropTransferData
+import androidx.compose.ui.platform.PlatformDragAndDropManager
+import androidx.compose.ui.platform.PlatformDragAndDropSource
+import androidx.compose.ui.platform.Win32ScreenReader
 import androidx.compose.ui.win32.Win32DropTarget
+import androidx.compose.ui.win32.startTextDrag
 import androidx.compose.ui.win32.Win32Event
 import androidx.compose.ui.win32.markProcessDpiAware
 import androidx.compose.ui.win32.systemScale
@@ -288,6 +295,36 @@ private class ComposeWindow(
     //  - [scene.draw] during the drawing phase
     private val sceneRenderingScope = SingleComposeSceneRenderingScope { skiaLayer.needRender() }
 
+    private val screenReader = Win32ScreenReader()
+
+    /**
+     * Starts shell drags for content that asks to be dragged out of the window. DoDragDrop runs a
+     * modal loop of its own, so it is only entered from a pointer gesture, never during layout.
+     */
+    private val dragAndDropManager = object : PlatformDragAndDropManager {
+        override val isRequestDragAndDropTransferRequired: Boolean get() = true
+
+        override fun requestDragAndDropTransfer(
+            source: PlatformDragAndDropSource,
+            offset: Offset,
+        ) {
+            var payload: DragAndDropTransferData? = null
+            val scope = object : PlatformDragAndDropSource.StartTransferScope {
+                override fun startDragAndDropTransfer(
+                    transferData: DragAndDropTransferData,
+                    decorationSize: Size,
+                    drawDragDecoration: DrawScope.() -> Unit,
+                ): Boolean {
+                    // The shell draws its own drag image, so the decoration is not used.
+                    payload = transferData
+                    return true
+                }
+            }
+            with(source) { scope.startDragAndDropTransfer(offset) { payload != null } }
+            payload?.text?.let(::startTextDrag)
+        }
+    }
+
     /** Shell drop target, registered once the window exists. */
     private var dropTarget: Win32DropTarget? = null
 
@@ -307,6 +344,8 @@ private class ComposeWindow(
             override val windowInfo get() = _windowInfo
             override val architectureComponentsOwner get() = archComponentsOwner
             override val textInputService get() = this@ComposeWindow.textInputService
+            override val screenReader get() = this@ComposeWindow.screenReader
+            override val dragAndDropManager get() = this@ComposeWindow.dragAndDropManager
 
             override fun setPointerIcon(pointerIcon: PointerIcon) {
                 cursor = pointerIcon.win32CursorOrDefault()
