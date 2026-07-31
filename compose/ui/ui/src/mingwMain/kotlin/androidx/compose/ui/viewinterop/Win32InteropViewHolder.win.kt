@@ -27,10 +27,19 @@ import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.unit.round
 import kotlin.math.roundToInt
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.alloc
+import kotlinx.cinterop.memScoped
+import kotlinx.cinterop.ptr
 import platform.windows.CreateRectRgn
 import platform.windows.DestroyWindow
 import platform.windows.HWND
+import platform.windows.RDW_ALLCHILDREN
+import platform.windows.RDW_ERASE
+import platform.windows.RDW_INVALIDATE
+import platform.windows.RECT
+import platform.windows.RedrawWindow
 import platform.windows.SWP_NOACTIVATE
+import platform.windows.SWP_NOREDRAW
 import platform.windows.SWP_NOZORDER
 import platform.windows.SW_HIDE
 import platform.windows.SW_SHOWNA
@@ -101,6 +110,16 @@ internal class Win32InteropViewHolder(
             return
         }
 
+        // Position and clip describe one state but Win32 sets them separately, and whichever goes
+        // first is briefly wrong: move first and the window is repainted at the new position still
+        // wearing the old clip, which draws the control past the edge it is being clipped to — by
+        // as much as its own height, right over whatever is above the scroll viewport.
+        //
+        // So neither is allowed to paint. SWP_NOREDRAW suppresses the move's repaint and
+        // SetWindowRgn's redraw flag is off, then one invalidation below covers both the area the
+        // window left and the one it now occupies. SWP_NOREDRAW alone is not enough: it also
+        // suppresses invalidating the vacated area, which leaves the pixels the child last drew
+        // sitting there, since WS_CLIPCHILDREN had been excluding that area from the parent.
         SetWindowPos(
             interopView,
             null,
@@ -108,7 +127,7 @@ internal class Win32InteropViewHolder(
             position.y,
             size.width,
             size.height,
-            (SWP_NOZORDER or SWP_NOACTIVATE).toUInt(),
+            (SWP_NOZORDER or SWP_NOACTIVATE or SWP_NOREDRAW).toUInt(),
         )
 
         // The region is in the child's own coordinates, and SetWindowRgn takes ownership of it.
@@ -118,13 +137,39 @@ internal class Win32InteropViewHolder(
             (visible.right.roundToInt() - position.x),
             (visible.bottom.roundToInt() - position.y),
         )
-        SetWindowRgn(interopView, clip, 1)
+        SetWindowRgn(interopView, clip, 0)
 
         if (!isVisible) {
             isVisible = true
             ShowWindow(interopView, SW_SHOWNA)
         }
+
+        // RDW_ALLCHILDREN brings the child into the same repaint as the parent, so the two come
+        // back together rather than one trailing the other by a frame.
+        memScoped {
+            val dirty = alloc<RECT>()
+            dirty.left = minOf(position.x, lastLeft)
+            dirty.top = minOf(position.y, lastTop)
+            dirty.right = maxOf(position.x + size.width, lastRight)
+            dirty.bottom = maxOf(position.y + size.height, lastBottom)
+            RedrawWindow(
+                win32Container.window,
+                dirty.ptr,
+                null,
+                (RDW_INVALIDATE or RDW_ERASE or RDW_ALLCHILDREN).toUInt(),
+            )
+        }
+        lastLeft = position.x
+        lastTop = position.y
+        lastRight = position.x + size.width
+        lastBottom = position.y + size.height
     }
+
+    /** The rectangle the window last occupied, so a move can repaint what it leaves behind. */
+    private var lastLeft = 0
+    private var lastTop = 0
+    private var lastRight = 0
+    private var lastBottom = 0
 
     /** Tracked so the window is not shown or hidden on every layout pass. */
     private var isVisible = false
