@@ -30,6 +30,7 @@ import androidx.compose.ui.input.pointer.PointerButton
 import androidx.compose.ui.input.pointer.PointerButtons
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.Win32Cursors
 import androidx.compose.ui.input.pointer.win32CursorOrDefault
 import androidx.compose.ui.platform.DefaultArchitectureComponentsOwner
 import androidx.compose.ui.platform.FrameRecomposer
@@ -340,7 +341,9 @@ private class ComposeWindow(
     private var lastDragEvent: DragAndDropEvent? = null
 
     /** Cursor for the client area, applied on every `WM_SETCURSOR`. */
-    private var cursor: HCURSOR? = null
+    // Starts as the arrow, not null: WM_SETCURSOR runs long before Compose first sets a pointer
+    // icon, and SetCursor(null) hides the cursor rather than leaving it alone.
+    private var cursor: HCURSOR? = Win32Cursors.Arrow.win32CursorOrDefault()
 
     /** `WM_MOUSELEAVE` carries no coordinates, so the last known position is reused for `Exit`. */
     private var lastPointerPosition = Offset.Zero
@@ -763,7 +766,8 @@ private fun registerWindowClass(): UShort = memScoped {
     windowClass.lpfnWndProc = staticCFunction(::composeWindowProc)
     windowClass.hInstance = GetModuleHandleW(null)
     // The cursor is chosen per frame by the content, and skia paints every pixel itself.
-    windowClass.hCursor = null
+    // A sane class cursor as a fallback for any path that does not reach WM_SETCURSOR.
+    windowClass.hCursor = Win32Cursors.Arrow.win32CursorOrDefault()
     windowClass.hbrBackground = null
     windowClass.lpszClassName = WINDOW_CLASS_NAME.wcstr.ptr
     // Room for the ComposeWindow pointer. `GWLP_USERDATA` is unavailable: skiko's SkiaLayer
