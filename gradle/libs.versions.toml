@@ -78,7 +78,11 @@ protobuf = "4.28.2"
 paparazzi = "1.0.0"
 paparazziNative = "2022.1.1-canary-f5f9f71"
 shadow = "8.1.1"
-skiko = "0.151.0-alpha04-mingw-SNAPSHOT"
+skiko = "0.151.0-alpha04-mingw"
+# Upstream skiko, used only for the per-OS AWT native runtimes this fork cannot build: it has no
+# macOS toolchain at all and no Linux Skia build. See skikoAwtRuntime* below -- this is the version
+# upstream pinned before the fork, not a placeholder.
+skikoUpstream = "0.150.1"
 spdxGradlePlugin = "0.6.0"
 sqldelight = "1.3.0"
 retrofit = "2.12.0"
@@ -293,16 +297,25 @@ rxjava2 = { module = "io.reactivex.rxjava2:rxjava", version = "2.2.9" }
 rxjava3 = { module = "io.reactivex.rxjava3:rxjava", version = "3.0.0" }
 sdklib = { module = "com.android.tools:sdklib", version.ref = "androidLint" }
 shadow = { module = "com.gradleup.shadow:shadow-gradle-plugin", version = "8.3.7" }
-skiko = { module = "org.jetbrains.skiko:skiko", version.ref = "skiko" }
-skikoAwt = { module = "org.jetbrains.skiko:skiko-awt", version.ref = "skiko" }
-skikoAwtRuntimeMacOsArm64 = { module = "org.jetbrains.skiko:skiko-awt-runtime-macos-arm64", version.ref = "skiko" }
-skikoAwtRuntimeMacOsX64 = { module = "org.jetbrains.skiko:skiko-awt-runtime-macos-x64", version.ref = "skiko" }
-skikoAwtRuntimeWindowsX64 = { module = "org.jetbrains.skiko:skiko-awt-runtime-windows-x64", version.ref = "skiko" }
-skikoAwtRuntimeWindowsArm64 = { module = "org.jetbrains.skiko:skiko-awt-runtime-windows-arm64", version.ref = "skiko" }
-skikoAwtRuntimeLinuxX64 = { module = "org.jetbrains.skiko:skiko-awt-runtime-linux-x64", version.ref = "skiko" }
-skikoAwtRuntimeLinuxArm64 = { module = "org.jetbrains.skiko:skiko-awt-runtime-linux-arm64", version.ref = "skiko" }
-skikoJsWasmRuntime = { module = "org.jetbrains.skiko:skiko-js-wasm-runtime", version.ref = "skiko" }
-skikoWasmJs = { module = "org.jetbrains.skiko:skiko-wasm-js", version.ref = "skiko" }
+# This fork's skiko, for every artifact it actually builds: the KMP root (which carries the
+# mingwX64 variant), the AWT classes, and the windows-x64 AWT native runtime.
+skiko = { module = "io.github.archivesteak.skiko:skiko", version.ref = "skiko" }
+skikoAwt = { module = "io.github.archivesteak.skiko:skiko-awt", version.ref = "skiko" }
+skikoAwtRuntimeWindowsX64 = { module = "io.github.archivesteak.skiko:skiko-awt-runtime-windows-x64", version.ref = "skiko" }
+# Upstream skiko for the native runtimes this fork cannot produce. Building these needs a macOS
+# toolchain (absent here, and not cross-compilable) and a Linux Skia build.
+#
+# Pairing an upstream native runtime with this fork's skiko-awt classes is NOT safe -- the Phase 0
+# extraction rewrote the JNI shims, so the symbols need not line up. These entries exist so the
+# build resolves; assembling compose:desktop:desktop for macOS, Linux or Windows arm64 from this
+# fork is not supported. Windows x64 is.
+skikoAwtRuntimeMacOsArm64 = { module = "org.jetbrains.skiko:skiko-awt-runtime-macos-arm64", version.ref = "skikoUpstream" }
+skikoAwtRuntimeMacOsX64 = { module = "org.jetbrains.skiko:skiko-awt-runtime-macos-x64", version.ref = "skikoUpstream" }
+skikoAwtRuntimeWindowsArm64 = { module = "org.jetbrains.skiko:skiko-awt-runtime-windows-arm64", version.ref = "skikoUpstream" }
+skikoAwtRuntimeLinuxX64 = { module = "org.jetbrains.skiko:skiko-awt-runtime-linux-x64", version.ref = "skikoUpstream" }
+skikoAwtRuntimeLinuxArm64 = { module = "org.jetbrains.skiko:skiko-awt-runtime-linux-arm64", version.ref = "skikoUpstream" }
+skikoJsWasmRuntime = { module = "org.jetbrains.skiko:skiko-js-wasm-runtime", version.ref = "skikoUpstream" }
+skikoWasmJs = { module = "org.jetbrains.skiko:skiko-wasm-js", version.ref = "skikoUpstream" }
 spdxGradlePluginz = { module = "org.spdx:spdx-gradle-plugin", version.ref = "spdxGradlePlugin" }
 sqldelightAndroid = { module = "com.squareup.sqldelight:android-driver", version.ref = "sqldelight" }
 sqldelightCoroutinesExt = { module = "com.squareup.sqldelight:coroutines-extensions", version.ref = "sqldelight" }

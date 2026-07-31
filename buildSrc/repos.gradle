@@ -66,9 +66,15 @@ def addMavenRepositories(RepositoryHandler handler) {
     }
     */
     if (true /* In JetBrains Fork */) {
-        // mavenLocal first: our locally published snapshots (skiko fork, compose klibs)
-        // must shadow the 0.0.0-SNAPSHOT dev snapshots in packages.jetbrains.team repos.
-        handler.mavenLocal()
+        // mavenLocal comes first so the locally published skiko fork wins over the dev snapshots
+        // in packages.jetbrains.team, but it is restricted to the groups this workshop publishes.
+        // Unrestricted, it would shadow every remote repository for every dependency in the build,
+        // so any stale or half-written artifact in ~/.m2 would silently take precedence.
+        handler.mavenLocal {
+            content {
+                includeGroupByRegex("io\\.github\\.archivesteak.*")
+            }
+        }
         handler.mavenCentral()
         handler.google {
             content {
