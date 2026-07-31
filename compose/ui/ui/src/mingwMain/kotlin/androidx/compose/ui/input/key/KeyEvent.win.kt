@@ -46,7 +46,11 @@ private const val EXTENDED_KEY_MASK = 0x01000000L
  * WM_SYSKEYDOWN/WM_SYSKEYUP/WM_CHAR). [wParam] carries the virtual-key code
  * (or the UTF-16 code unit for WM_CHAR).
  */
-internal fun win32KeyEvent(message: UInt, wParam: ULong, lParam: Long): KeyEvent {
+internal fun win32KeyEvent(message: UInt, wParam: ULong, lParam: Long): KeyEvent? {
+    var codePoint = 0
+    if (message == WM_CHAR) {
+        codePoint = codePointOf(wParam.toInt()) ?: return null
+    }
     return KeyEvent(
         nativeKeyEvent = InternalKeyEvent(
             key = if (message == WM_CHAR) Key.Unknown else keyOf(wParam, lParam),
@@ -55,12 +59,41 @@ internal fun win32KeyEvent(message: UInt, wParam: ULong, lParam: Long): KeyEvent
                 WM_KEYUP, WM_SYSKEYUP -> KeyEventType.KeyUp
                 else -> KeyEventType.Unknown
             },
-            // TODO: Support surrogate pairs (WM_CHAR delivers UTF-16 units)
-            codePoint = if (message == WM_CHAR) wParam.toInt() else 0,
+            codePoint = codePoint,
             modifiers = win32KeyboardModifiers(),
             nativeEvent = Win32Event(message, wParam, lParam)
         )
     )
+}
+
+/**
+ * The high half of a surrogate pair, waiting for its low half.
+ *
+ * `WM_CHAR` carries UTF-16 code units, so anything outside the BMP — emoji, most of CJK Ext B,
+ * historic scripts — arrives as two messages. Held between them; the window procedure is
+ * single-threaded, so no synchronisation is needed.
+ */
+private var pendingHighSurrogate: Int? = null
+
+/**
+ * Turns a `WM_CHAR` code unit into a code point, or null when there is nothing to deliver yet.
+ *
+ * A lone high surrogate is stored and swallowed: emitting it on its own would hand Compose half a
+ * character. The following low surrogate combines with it into the real code point. A low surrogate
+ * without a stored high one is malformed input and is dropped rather than passed on.
+ */
+private fun codePointOf(unit: Int): Int? {
+    val pending = pendingHighSurrogate
+    if (unit in 0xD800..0xDBFF) {
+        pendingHighSurrogate = unit
+        return null
+    }
+    pendingHighSurrogate = null
+    if (unit in 0xDC00..0xDFFF) {
+        if (pending == null) return null
+        return 0x10000 + ((pending - 0xD800) shl 10) + (unit - 0xDC00)
+    }
+    return unit
 }
 
 /**

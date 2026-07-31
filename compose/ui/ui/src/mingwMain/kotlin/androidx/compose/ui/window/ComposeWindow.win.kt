@@ -526,7 +526,9 @@ private class ComposeWindow(
             WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_CHAR -> {
                 // Unconsumed keys fall through to the system, so Alt+F4, menu mnemonics and the
                 // system keys keep working.
-                if (scene.sendKeyEvent(win32KeyEvent(message, wParam, lParam))) 0 else null
+                // null means the message was half of a surrogate pair with nothing to deliver yet.
+                val keyEvent = win32KeyEvent(message, wParam, lParam)
+                if (keyEvent != null && scene.sendKeyEvent(keyEvent)) 0 else null
             }
             WM_IME_STARTCOMPOSITION -> {
                 if (textInputService.isInputActive) {
