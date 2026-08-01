@@ -116,6 +116,9 @@ import platform.windows.RECT
 import platform.windows.RegisterClassExW
 import platform.windows.ReleaseCapture
 import platform.windows.ReleaseDC
+import platform.windows.SIZE_MAXIMIZED
+import platform.windows.SIZE_MINIMIZED
+import platform.windows.SIZE_RESTORED
 import platform.windows.SWP_NOACTIVATE
 import platform.windows.SWP_NOZORDER
 import platform.windows.SW_SHOWNORMAL
@@ -132,7 +135,9 @@ import platform.windows.TrackMouseEvent
 import platform.windows.TranslateMessage
 import platform.windows.UINT
 import platform.windows.UpdateWindow
+import platform.windows.WA_INACTIVE
 import platform.windows.WHEEL_DELTA
+import platform.windows.WM_ACTIVATE
 import platform.windows.WM_CHAR
 import platform.windows.WM_CLOSE
 import platform.windows.WM_DESTROY
@@ -157,6 +162,7 @@ import platform.windows.WM_RBUTTONDOWN
 import platform.windows.WM_RBUTTONUP
 import platform.windows.WM_SETCURSOR
 import platform.windows.WM_SETFOCUS
+import platform.windows.WM_SIZE
 import platform.windows.WM_SYSKEYDOWN
 import platform.windows.WM_SYSKEYUP
 import platform.windows.WM_XBUTTONDOWN
@@ -290,6 +296,14 @@ private class ComposeWindow(
     private val textInputService = Win32TextInputService()
     private val _windowInfo = WindowInfoImpl().apply { isWindowFocused = true }
     private val archComponentsOwner = DefaultArchitectureComponentsOwner()
+
+    /**
+     * Window state the lifecycle is derived from. Win32 reports activation and minimization as two
+     * independent messages, so both are tracked and the resulting state is computed in one place --
+     * see [syncLifecycleState].
+     */
+    private var isWindowActive = true
+    private var isWindowMinimized = false
 
     // TODO: It must be shared between Compose instances.
     //  It's supposed to be stored in platform's root view or window.
@@ -452,8 +466,7 @@ private class ComposeWindow(
         }
 
         archComponentsOwner.enableSavedStateHandles()
-        // TODO: Drive the remaining lifecycle events from window activation/minimization.
-        archComponentsOwner.lifecycle.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
+        syncLifecycleState()
 
         ShowWindow(window, SW_SHOWNORMAL)
         UpdateWindow(window)
@@ -466,6 +479,28 @@ private class ComposeWindow(
     fun destroy() {
         if (!isDisposed) {
             DestroyWindow(window)
+        }
+    }
+
+    /**
+     * Brings the lifecycle in line with the window's current state.
+     *
+     * A minimized window is not visible, so it drops to CREATED; a window that is visible but not
+     * focused is STARTED; a focused, visible window is RESUMED. Anything observing the lifecycle --
+     * `ViewModel`s, `repeatOnLifecycle`, `collectAsStateWithLifecycle` -- stops doing work when the
+     * user is not looking at the window, which is the whole point of it.
+     *
+     * The target state is assigned rather than the events being posted directly: [LifecycleRegistry]
+     * walks to it one event at a time, and posting e.g. ON_STOP while RESUMED would throw. Once
+     * DESTROYED nothing may move it again, so [dispose] wins permanently.
+     */
+    private fun syncLifecycleState() {
+        val registry = archComponentsOwner.lifecycle
+        if (registry.currentState == Lifecycle.State.DESTROYED) return
+        registry.currentState = when {
+            isWindowMinimized -> Lifecycle.State.CREATED
+            !isWindowActive -> Lifecycle.State.STARTED
+            else -> Lifecycle.State.RESUMED
         }
     }
 
@@ -568,6 +603,22 @@ private class ComposeWindow(
                 } else {
                     null
                 }
+            }
+            WM_ACTIVATE -> {
+                // The activation state is the low word; the high word is the minimized flag, which
+                // WM_SIZE reports more reliably.
+                isWindowActive = (wParam.toInt() and 0xFFFF) != WA_INACTIVE
+                syncLifecycleState()
+                // Null, not 0: DefWindowProcW still has focus work to do for this message.
+                null
+            }
+            WM_SIZE -> {
+                when (wParam.toInt()) {
+                    SIZE_MINIMIZED -> isWindowMinimized = true
+                    SIZE_RESTORED, SIZE_MAXIMIZED -> isWindowMinimized = false
+                }
+                syncLifecycleState()
+                null
             }
             WM_DPICHANGED -> {
                 onDpiChanged(lParam)
