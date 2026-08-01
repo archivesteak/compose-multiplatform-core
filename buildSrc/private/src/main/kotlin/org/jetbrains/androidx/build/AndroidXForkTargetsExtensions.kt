@@ -172,11 +172,22 @@ fun configureDarwinFlags(project: Project) {
              it.freeCompilerArgs += flags
         }
     }
-    project.multiplatformExtension!!.run {
-        macosArm64 { configureFreeCompilerArgs() }
-        iosArm64 { configureFreeCompilerArgs() }
-        iosSimulatorArm64 { configureFreeCompilerArgs() }
-    }
+    // These are Apple frameworks, so this only ever has Apple targets to configure. When the MAC
+    // platform group is disabled they were never created (see
+    // AndroidXMultiplatformExtension.macosArm64), and the create-or-configure `macosArm64 { }` DSL
+    // form would silently bring them back -- undoing the narrowing for every module that calls this.
+    if (!project.enableMac()) return
+
+    val appleTargets = setOf(
+        KonanTarget.MACOS_ARM64,
+        KonanTarget.IOS_ARM64,
+        KonanTarget.IOS_SIMULATOR_ARM64,
+    )
+    // Looked up rather than declared, for the same reason: configuring must not create.
+    project.multiplatformExtension!!.targets
+        .withType(KotlinNativeTarget::class.java)
+        .matching { it.konanTarget in appleTargets }
+        .all { it.configureFreeCompilerArgs() }
 }
 
 /**
