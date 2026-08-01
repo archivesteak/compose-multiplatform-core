@@ -49,10 +49,15 @@ jobs:
 
       # patchSkikoSymbols* rewrites symbol names in the native bridges with llvm-objcopy. Xcode's
       # toolchain does not ship it, and the macOS runners have no LLVM on PATH by default.
-      - name: Install LLVM (llvm-objcopy)
+      #
+      # Only llvm-objcopy is exposed, by symlink. Putting Homebrew LLVM's bin on PATH also shadows
+      # Xcode's clang, and the native bridges then fail to compile against the macOS SDK.
+      - name: Install llvm-objcopy
         run: |
           brew install llvm
-          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+          sudo ln -sf "$(brew --prefix llvm)/bin/llvm-objcopy" /usr/local/bin/llvm-objcopy
+          llvm-objcopy --version
+          clang --version
 
       # skiko must land in mavenLocal first: the Compose fork resolves it from there by coordinate,
       # exactly as it does on the Windows machine.
