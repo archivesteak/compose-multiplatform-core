@@ -94,6 +94,14 @@ enum class ComposePlatforms(vararg val alternativeNames: String) {
             EnumSet.of(KotlinMultiplatform) + JVM_BASED + IOS + MACOS_NATIVE + WEB +
                 WINDOWS_NATIVE
 
+        /**
+         * For modules that have no `mingwX64()` target: artifact-redirect modules, whose targets
+         * point at published `androidx.*` artifacts that have no mingw variant, and JVM-oriented
+         * ones. A component must not claim a platform it publishes no artifact for -- the publish
+         * task looks the publication up by name and fails outright when it is missing.
+         */
+        val SKIKO_SUPPORT_NO_MINGW = SKIKO_SUPPORT - WINDOWS_NATIVE
+
         val ALL = EnumSet.allOf(ComposePlatforms::class.java)
 
         /**

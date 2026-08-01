@@ -26,18 +26,20 @@ import org.gradle.api.Project
  */
 object JetBrainsPublication {
     private const val ANDROIDX_GROUP_PREFIX = "androidx."
-    private const val JETBRAINS_COMPOSE_GROUP_PREFIX = "org.jetbrains.compose."
-    private const val JETBRAINS_FORK_GROUP_PREFIX = "org.jetbrains.androidx."
+    // This fork publishes under its own namespace: Maven Central verifies namespace ownership, and
+    // org.jetbrains.* belongs to JetBrains. Kotlin package names are untouched - only coordinates.
+    private const val JETBRAINS_COMPOSE_GROUP_PREFIX = "io.github.archivesteak.compose."
+    private const val JETBRAINS_FORK_GROUP_PREFIX = "io.github.archivesteak.androidx."
 
     val libraryToComponents = mapOf(
         "COMPOSE" to listOf(
             ComposeComponent(":compose:animation:animation"),
             ComposeComponent(":compose:animation:animation-core"),
-            ComposeComponent(":compose:animation:animation-graphics"),
+            ComposeComponent(":compose:animation:animation-graphics", supportedPlatforms = ComposePlatforms.SKIKO_SUPPORT_NO_MINGW),
             ComposeComponent(":compose:foundation:foundation"),
             ComposeComponent(":compose:foundation:foundation-layout"),
             ComposeComponent(":compose:material:material"),
-            ComposeComponent(":compose:material:material-navigation"),
+            ComposeComponent(":compose:material:material-navigation", supportedPlatforms = ComposePlatforms.SKIKO_SUPPORT_NO_MINGW),
             ComposeComponent(":compose:material:material-ripple"),
             ComposeComponent(":compose:runtime:runtime", supportedPlatforms = ComposePlatforms.ALL),
             ComposeComponent(":compose:runtime:runtime-saveable", supportedPlatforms = ComposePlatforms.ALL),
@@ -48,7 +50,7 @@ object JetBrainsPublication {
                 supportedPlatforms = ComposePlatforms.SKIKO_SUPPORT,
             ),
             ComposeComponent(":compose:ui:ui-graphics"),
-            ComposeComponent(":compose:ui:ui-test"),
+            ComposeComponent(":compose:ui:ui-test", supportedPlatforms = ComposePlatforms.SKIKO_SUPPORT_NO_MINGW),
             ComposeComponent(
                 ":compose:ui:ui-test-junit4",
                 supportedPlatforms = ComposePlatforms.JVM_BASED
@@ -59,7 +61,7 @@ object JetBrainsPublication {
                 ":compose:ui:ui-tooling-data",
                 supportedPlatforms = ComposePlatforms.JVM_BASED
             ),
-            ComposeComponent(":compose:ui:ui-tooling-preview"),
+            ComposeComponent(":compose:ui:ui-tooling-preview", supportedPlatforms = ComposePlatforms.SKIKO_SUPPORT_NO_MINGW),
             ComposeComponent(
                 ":compose:ui:ui-uikit",
                 supportedPlatforms = ComposePlatforms.IOS
@@ -83,14 +85,14 @@ object JetBrainsPublication {
         ),
         "COMPOSE_MATERIAL3" to listOf(
             ComposeComponent(":compose:material3:material3"),
-            ComposeComponent(":compose:material3:material3-window-size-class"),
-            ComposeComponent(":compose:material3:material3-adaptive-navigation-suite"),
+            ComposeComponent(":compose:material3:material3-window-size-class", supportedPlatforms = ComposePlatforms.SKIKO_SUPPORT_NO_MINGW),
+            ComposeComponent(":compose:material3:material3-adaptive-navigation-suite", supportedPlatforms = ComposePlatforms.SKIKO_SUPPORT_NO_MINGW),
         ),
         "COMPOSE_MATERIAL3_ADAPTIVE" to listOf(
-            ComposeComponent(":compose:material3:adaptive:adaptive"),
-            ComposeComponent(":compose:material3:adaptive:adaptive-layout"),
-            ComposeComponent(":compose:material3:adaptive:adaptive-navigation"),
-            ComposeComponent(":compose:material3:adaptive:adaptive-navigation3"),
+            ComposeComponent(":compose:material3:adaptive:adaptive", supportedPlatforms = ComposePlatforms.SKIKO_SUPPORT_NO_MINGW),
+            ComposeComponent(":compose:material3:adaptive:adaptive-layout", supportedPlatforms = ComposePlatforms.SKIKO_SUPPORT_NO_MINGW),
+            ComposeComponent(":compose:material3:adaptive:adaptive-navigation", supportedPlatforms = ComposePlatforms.SKIKO_SUPPORT_NO_MINGW),
+            ComposeComponent(":compose:material3:adaptive:adaptive-navigation3", supportedPlatforms = ComposePlatforms.SKIKO_SUPPORT_NO_MINGW),
         ),
         "LIFECYCLE" to listOf(
             ComposeComponent(
@@ -112,12 +114,12 @@ object JetBrainsPublication {
             ComposeComponent(":lifecycle:lifecycle-viewmodel-navigation3", supportedPlatforms = ComposePlatforms.ALL),
         ),
         "NAVIGATION" to listOf(
-            ComposeComponent(":navigation:navigation-compose"),
+            ComposeComponent(":navigation:navigation-compose", supportedPlatforms = ComposePlatforms.SKIKO_SUPPORT_NO_MINGW),
             ComposeComponent(":navigation:navigation-common", supportedPlatforms = ComposePlatforms.ALL - ComposePlatforms.WINDOWS_NATIVE),
             ComposeComponent(":navigation:navigation-runtime", supportedPlatforms = ComposePlatforms.ALL - ComposePlatforms.WINDOWS_NATIVE),
         ),
         "NAVIGATION_3" to listOf(
-            ComposeComponent(":navigation3:navigation3-ui"),
+            ComposeComponent(":navigation3:navigation3-ui", supportedPlatforms = ComposePlatforms.SKIKO_SUPPORT_NO_MINGW),
         ),
         "NAVIGATION_EVENT" to listOf(
             ComposeComponent(":navigationevent:navigationevent-compose", supportedPlatforms = ComposePlatforms.ALL),
