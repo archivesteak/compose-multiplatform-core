@@ -61,10 +61,14 @@ jobs:
 
       # skiko must land in mavenLocal first: the Compose fork resolves it from there by coordinate,
       # exactly as it does on the Windows machine.
+      # skiko must land in mavenLocal first: the Compose fork resolves it from there by coordinate,
+      # exactly as it does on the Windows machine. deploy.release=true withholds the -SNAPSHOT
+      # suffix, matching the version the Windows publish and the Compose fork both use.
       - name: Build and publish skiko (Apple targets)
         working-directory: skiko/skiko
         run: |
           ./gradlew --no-daemon publishToMavenLocal \
+            -Pdeploy.release=true \
             -Pskiko.native.mac.enabled=true \
             -Pskiko.native.ios.arm64.enabled=true \
             -Pskiko.native.ios.simulatorArm64.enabled=true
