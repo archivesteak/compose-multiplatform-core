@@ -64,16 +64,17 @@ jobs:
           echo "$PWD/emsdk/upstream/emscripten" >> "$GITHUB_PATH"
 
       # skiko must land in mavenLocal first: the Compose fork's js/wasmJs sources resolve it from
-      # there by coordinate. skiko.wasm.enabled gates both the js and wasmJs targets; awt is
-      # disabled to keep the job lean. deploy.release=true withholds the -SNAPSHOT suffix, matching
-      # the version the Windows publish and the Compose fork both use.
+      # there by coordinate. skiko.wasm.enabled gates both the js and wasmJs targets; awt stays on
+      # because the desktop (jvm) compilations also contain skikoMain and the Kotlin 2.4 metadata
+      # visibility rule drops any dependency that does not resolve in *every* such compilation.
+      # deploy.release=true withholds the -SNAPSHOT suffix, matching the version the Windows
+      # publish and the Compose fork both use.
       - name: Build and publish skiko (js + wasmJs)
         working-directory: skiko/skiko
         run: |
           ./gradlew --no-daemon publishToMavenLocal \
             -Pdeploy.release=true \
-            -Pskiko.wasm.enabled=true \
-            -Pskiko.awt.enabled=false
+            -Pskiko.wasm.enabled=true
 
       # -mac,-windows keep Apple and mingwX64 targets out: Apple belongs to publish-apple.yml, and
       # mingwX64 would demand the hand-built GNU-ABI Skia that only exists on the Windows machine.
