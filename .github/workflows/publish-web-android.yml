@@ -1,0 +1,97 @@
+name: Publish web and Android variants
+
+# Why this exists: Kotlin 2.4.0's SourceSetVisibilityProvider requires a commonMain dependency to
+# resolve to a real platform variant in *every* platform compilation of the consumer, or the
+# dependency contributes zero source sets to the metadata compile classpath (it vanishes silently).
+# MaterialKolor declares android, jvm, js, wasmJs, macosArm64, mingwX64, iosArm64 and
+# iosSimulatorArm64, so an unmodified MaterialKolor can only build against our Compose fork if the
+# fork publishes all of those. This workflow fills js, wasmJs and android; publish-apple.yml covers
+# the Apple targets; desktop and mingwX64 are published locally on Windows.
+#
+# js/wasmJs compile anywhere (pure Kotlin/JS, prebuilt Skia downloaded per platform), and android
+# builds on the ubuntu runner's preinstalled SDK. Nothing here needs a hand-built Skia: only
+# mingwX64 does, and it is disabled below.
+#
+# Output is a plain Maven repository layout uploaded as a workflow artifact, same contract as
+# publish-apple.yml: download it and merge it over ~/.m2/repository.
+
+on:
+  workflow_dispatch:
+    inputs:
+      skiko_ref:
+        description: "Branch/tag/SHA of archivesteak/skiko to build"
+        required: false
+        default: mingw
+
+jobs:
+  web-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the Compose fork
+        uses: actions/checkout@v4
+        with:
+          path: compose-multiplatform-core
+
+      - name: Check out the skiko fork
+        uses: actions/checkout@v4
+        with:
+          repository: archivesteak/skiko
+          ref: ${{ inputs.skiko_ref || 'mingw' }}
+          path: skiko
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # The Android SDK is preinstalled on the runner; point the androidx build at it explicitly.
+      - name: Point the build at the Android SDK
+        run: echo "sdk.dir=$ANDROID_HOME" > compose-multiplatform-core/local.properties
+
+      # skiko must land in mavenLocal first: the Compose fork's js/wasmJs sources resolve it from
+      # there by coordinate. skiko.wasm.enabled gates both the js and wasmJs targets; awt is
+      # disabled to keep the job lean. deploy.release=true withholds the -SNAPSHOT suffix, matching
+      # the version the Windows publish and the Compose fork both use.
+      - name: Build and publish skiko (js + wasmJs)
+        working-directory: skiko/skiko
+        run: |
+          ./gradlew --no-daemon publishToMavenLocal \
+            -Pdeploy.release=true \
+            -Pskiko.wasm.enabled=true \
+            -Pskiko.awt.enabled=false
+
+      # -mac,-windows keep Apple and mingwX64 targets out: Apple belongs to publish-apple.yml, and
+      # mingwX64 would demand the hand-built GNU-ABI Skia that only exists on the Windows machine.
+      - name: Build and publish the Compose fork (js, wasmJs, android)
+        working-directory: compose-multiplatform-core
+        run: |
+          ./gradlew --no-daemon publishComposeJbToMavenLocal \
+            -Pcompose.platforms=js,wasmJs,android \
+            -Pandroidx.enabled.kmp.target.platforms=-mac,-windows
+
+      # Ship only this fork's own coordinates, same reasoning as publish-apple.yml.
+      - name: Collect the published artifacts
+        run: |
+          mkdir -p staging/repository
+          cp -R ~/.m2/repository/io/github/archivesteak staging/repository/
+          find staging -name "*.klib" | head -40
+          echo "klibs: $(find staging -name '*.klib' | wc -l)"
+
+      - name: Fail if nothing was produced
+        run: |
+          count=$(find staging -name "*.klib" -o -name "*.aar" | wc -l)
+          if [ "$count" -eq 0 ]; then
+            echo "No klibs or aars were produced - the publish silently did nothing."
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: maven-web-android
+          path: staging/repository
+          if-no-files-found: error
