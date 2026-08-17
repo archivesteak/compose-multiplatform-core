@@ -53,6 +53,16 @@ jobs:
       - name: Point the build at the Android SDK
         run: echo "sdk.dir=$ANDROID_HOME" > compose-multiplatform-core/local.properties
 
+      # skiko's web targets link a wasm side module with emcc. Upstream pins Emscripten 4.0.7
+      # (skiko/.github/workflows/tests.yml); only its bin directory goes on PATH.
+      - name: Install Emscripten
+        working-directory: skiko
+        run: |
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git
+          ./emsdk/emsdk install 4.0.7
+          ./emsdk/emsdk activate 4.0.7
+          echo "$PWD/emsdk/upstream/emscripten" >> "$GITHUB_PATH"
+
       # skiko must land in mavenLocal first: the Compose fork's js/wasmJs sources resolve it from
       # there by coordinate. skiko.wasm.enabled gates both the js and wasmJs targets; awt is
       # disabled to keep the job lean. deploy.release=true withholds the -SNAPSHOT suffix, matching
