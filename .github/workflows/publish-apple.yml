@@ -47,6 +47,14 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # The default Xcode on the runner image is too old for the uikit ObjC sources: they call
+      # UIAccessibilityElement.accessibilityHitTest, declared only in newer iOS SDKs. Select the
+      # newest Xcode the image has instead of pinning a version it may stop carrying.
+      - name: Select the newest available Xcode
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)/Contents/Developer"
+          xcodebuild -version
+
       # patchSkikoSymbols* rewrites symbol names in the native bridges with llvm-objcopy. Xcode's
       # toolchain does not ship it, and the macOS runners have no LLVM on PATH by default.
       #
