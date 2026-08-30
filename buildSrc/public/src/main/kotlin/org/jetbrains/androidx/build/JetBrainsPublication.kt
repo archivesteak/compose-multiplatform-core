@@ -75,11 +75,9 @@ object JetBrainsPublication {
                     "KotlinMultiplatform",
                     "Jvm",
                     "Jvmlinux-x64",
-                    "Jvmlinux-arm64",
                     "Jvmmacos-x64",
                     "Jvmmacos-arm64",
                     "Jvmwindows-x64",
-                    "Jvmwindows-arm64",
                 )
             ),
         ),

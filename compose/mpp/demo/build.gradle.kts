@@ -112,6 +112,7 @@ kotlin {
             dependencies {
                 implementation(libs.kotlinCoroutinesCore)
                 implementation(libs.kotlinSerializationCore)
+                implementation(libs.skiko.skottie)
 
                 implementation(project(":compose:foundation:foundation"))
                 implementation(project(":compose:foundation:foundation-layout"))
@@ -157,6 +158,7 @@ kotlin {
             dependencies {
                 implementation(libs.kotlinCoroutinesSwing)
                 implementation(libs.skikoCurrentOs)
+                implementation(libs.skikoSkottieCurrentOs)
             }
         }
 
@@ -298,6 +300,7 @@ private fun configureSkikoWebRuntime(
         Copy::class.java
     ) {
         destinationDir = project.file(unpackedRuntimeDir)
+        duplicatesStrategy = DuplicatesStrategy.EXCLUDE
         from(skikoWebRuntimeJarFiles.map { artifact -> project.zipTree(artifact) })
     }
 

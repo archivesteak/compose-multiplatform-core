@@ -104,12 +104,12 @@ def jvmOs(container, name, skikoDep) {
 afterEvaluate {
     publishing {
         publications {
+            // Only advertise OS runtimes emitted by this fork's producer matrix. In particular,
+            // Linux arm64 and Windows arm64 must not fall back to ABI-incompatible upstream JNI.
             jvmOs(it, "linux-x64", libs.skikoAwtRuntimeLinuxX64.get())
-            jvmOs(it, "linux-arm64", libs.skikoAwtRuntimeLinuxArm64.get())
             jvmOs(it, "macos-x64", libs.skikoAwtRuntimeMacOsX64.get())
             jvmOs(it, "macos-arm64", libs.skikoAwtRuntimeMacOsArm64.get())
             jvmOs(it, "windows-x64", libs.skikoAwtRuntimeWindowsX64.get())
-            jvmOs(it, "windows-arm64", libs.skikoAwtRuntimeWindowsArm64.get())
         }
     }
 }

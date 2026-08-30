@@ -153,27 +153,6 @@ private fun Project.configureComponentPublishing(
                 }
             }
         }
-        // Maven Central rejects unsigned artifacts. Gated on the same maven.central.sign property
-        // the skiko fork uses, so both forks are driven identically, and reading the key from the
-        // environment because an armored PGP block is multi-line and does not survive a properties
-        // file. Off by default: local and CI builds have no reason to sign.
-        if (project.findProperty("maven.central.sign") == "true") {
-            project.plugins.apply("signing")
-            val signing = project.extensions.getByType(org.gradle.plugins.signing.SigningExtension::class.java)
-            val key = System.getenv("MAVEN_CENTRAL_SIGN_KEY")
-            val password = System.getenv("MAVEN_CENTRAL_SIGN_PASSWORD")
-            require(!key.isNullOrBlank()) {
-                "maven.central.sign=true but MAVEN_CENTRAL_SIGN_KEY is not set"
-            }
-            signing.useInMemoryPgpKeys(key, password)
-            signing.sign(publications)
-            // Publications share the sources and javadoc jars, so a publish task routinely consumes
-            // a .asc produced by another publication's sign task; Gradle 9 fails on the undeclared
-            // dependency rather than racing it.
-            project.tasks.withType(org.gradle.api.publish.maven.tasks.AbstractPublishToMaven::class.java)
-                .configureEach { it.dependsOn(project.tasks.withType(org.gradle.plugins.signing.Sign::class.java)) }
-        }
-
         publications.withType(MavenPublication::class.java).all { publication ->
             // TODO CMP-10368 fix old capability mechanism after migration to new artifact redirection
 //            if (kmpExtension.redirectTargetDecls.isNotEmpty()) {

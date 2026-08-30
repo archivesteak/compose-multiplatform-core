@@ -34,28 +34,33 @@ class SkikoSetup {
                         version('skiko', skikoOverride)
                     }
                     String os = System.getProperty("os.name").toLowerCase(Locale.US)
-                    String currentOsArtifact
+                    String currentOsSuffix
                     if (os.contains("mac os x") || os.contains("darwin") || os.contains("osx")) {
                         def arch = System.getProperty("os.arch")
                         if (arch == "aarch64") {
-                            currentOsArtifact = "skiko-awt-runtime-macos-arm64"
+                            currentOsSuffix = "macos-arm64"
                         } else {
-                            currentOsArtifact = "skiko-awt-runtime-macos-x64"
+                            currentOsSuffix = "macos-x64"
                         }
                     } else if (os.startsWith("win")) {
-                        currentOsArtifact = "skiko-awt-runtime-windows-x64"
+                        currentOsSuffix = "windows-x64"
                     } else if (os.startsWith("linux")) {
                         def arch = System.getProperty("os.arch")
                         if (arch == "aarch64") {
-                            currentOsArtifact = "skiko-awt-runtime-linux-arm64"
+                            currentOsSuffix = "linux-arm64"
                         } else {
-                            currentOsArtifact = "skiko-awt-runtime-linux-x64"
+                            currentOsSuffix = "linux-x64"
                         }
                     } else {
                         throw new GradleException("Unsupported operating system $os")
                     }
-                    library("skikoCurrentOs", "org.jetbrains.skiko",
-                            currentOsArtifact).versionRef("skiko")
+                    // The fork changes JNI symbols, so its JVM classes and native runtime must
+                    // always come from the same producer/version. Missing host runtimes fail
+                    // resolution instead of silently falling back to an ABI-incompatible upstream.
+                    library("skikoCurrentOs", "io.github.archivesteak.skiko",
+                            "skiko-awt-runtime-${currentOsSuffix}").versionRef("skiko")
+                    library("skikoSkottieCurrentOs", "io.github.archivesteak.skiko",
+                            "skiko-skottie-awt-runtime-${currentOsSuffix}").versionRef("skiko")
                 }
             }
         }
