@@ -9,8 +9,8 @@ name: Publish Apple variants
 # target is explicitly disabled below. So this workflow compiles Kotlin, not Skia.
 #
 # Output is a plain Maven repository layout uploaded as a workflow artifact. No remote repository,
-# no tokens, nothing published to the world: download the artifact and unzip it over
-# ~/.m2/repository, and the Apple variants join the ones already published locally.
+# no tokens, nothing published to the world. Root .module files must be union-merged with the local
+# publication; blindly unzipping one partial descriptor over another would hide valid variants.
 
 on:
   workflow_dispatch:
@@ -68,8 +68,6 @@ jobs:
           clang --version
 
       # skiko must land in mavenLocal first: the Compose fork resolves it from there by coordinate,
-      # exactly as it does on the Windows machine.
-      # skiko must land in mavenLocal first: the Compose fork resolves it from there by coordinate,
       # exactly as it does on the Windows machine. deploy.release=true withholds the -SNAPSHOT
       # suffix, matching the version the Windows publish and the Compose fork both use.
       - name: Build and publish skiko (Apple targets)
@@ -79,7 +77,8 @@ jobs:
             -Pdeploy.release=true \
             -Pskiko.native.mac.enabled=true \
             -Pskiko.native.ios.arm64.enabled=true \
-            -Pskiko.native.ios.simulatorArm64.enabled=true
+            -Pskiko.native.ios.simulatorArm64.enabled=true \
+            -Pskiko.native.mingw.enabled=false
 
       # -windows disables the mingwX64 target, which would otherwise demand the hand-built Skia that
       # only exists on the Windows machine. -js,-wasm are simply not part of this gap.
@@ -96,6 +95,10 @@ jobs:
         run: |
           mkdir -p staging/repository
           cp -R ~/.m2/repository/io/github/archivesteak staging/repository/
+          if find staging -type d -name skiko-mingwx64 -print -quit | grep -q .; then
+            echo "Apple CI must not upload a skiko-mingwx64 publication."
+            exit 1
+          fi
           find staging -name "*.klib" | head -40
           echo "klibs: $(find staging -name '*.klib' | wc -l)"
 

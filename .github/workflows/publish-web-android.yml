@@ -5,15 +5,17 @@ name: Publish web and Android variants
 # dependency contributes zero source sets to the metadata compile classpath (it vanishes silently).
 # MaterialKolor declares android, jvm, js, wasmJs, macosArm64, mingwX64, iosArm64 and
 # iosSimulatorArm64, so an unmodified MaterialKolor can only build against our Compose fork if the
-# fork publishes all of those. This workflow fills js, wasmJs and android; publish-apple.yml covers
-# the Apple targets; desktop and mingwX64 are published locally on Windows.
+# fork publishes all of those. This workflow fills js, wasmJs and android, and also fills Skiko's
+# declared linuxX64/linuxArm64 variants; publish-apple.yml covers the Apple targets; desktop and
+# mingwX64 are published locally on Windows.
 #
 # js/wasmJs compile anywhere (pure Kotlin/JS, prebuilt Skia downloaded per platform), and android
 # builds on the ubuntu runner's preinstalled SDK. Nothing here needs a hand-built Skia: only
 # mingwX64 does, and it is disabled below.
 #
 # Output is a plain Maven repository layout uploaded as a workflow artifact, same contract as
-# publish-apple.yml: download it and merge it over ~/.m2/repository.
+# publish-apple.yml. Its root .module files must be union-merged with the local and Apple metadata;
+# blindly overwriting one partial publication with another would hide otherwise valid variants.
 
 on:
   workflow_dispatch:
@@ -88,7 +90,99 @@ jobs:
         run: |
           ./gradlew --no-daemon publishToMavenLocal \
             -Pdeploy.release=true \
-            -Pskiko.wasm.enabled=true
+            -Pskiko.wasm.enabled=true \
+            -Pskiko.native.mingw.enabled=false
+
+      # Skiko declares both Linux/Native targets in its root metadata. Build them with the exact
+      # cross-toolchain image checked into the Skiko fork. The host Maven repository is mounted so
+      # the target publications join the web publications produced above; nothing leaves mavenLocal.
+      - name: Build and publish skiko (linuxX64 + linuxArm64)
+        run: |
+          docker build \
+            --tag skiko-linux-native:ci \
+            skiko/skiko/docker/linux-amd64
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE":/workspace \
+            -v "$HOME/.gradle":/gradle-cache \
+            -v "$HOME/.m2":/root/.m2 \
+            -e GRADLE_USER_HOME=/gradle-cache \
+            -w /workspace/skiko \
+            skiko-linux-native:ci \
+            bash -euo pipefail -c '
+              ./gradlew -p skiko --no-daemon --stacktrace --rerun-tasks \
+                -Pdeploy.release=true \
+                -Pskiko.native.enabled=false \
+                -Pskiko.native.linux.enabled=true \
+                -Pskiko.awt.enabled=false \
+                -Pskiko.native.mingw.enabled=false \
+                publishLinuxArm64PublicationToMavenLocal \
+                publishLinuxX64PublicationToMavenLocal \
+                generateMetadataFileForKotlinMultiplatformPublication
+            '
+
+      # A target-only Gradle publication intentionally does not rewrite the root KMP descriptor.
+      # Union the Linux variants generated under the native configuration into the already-published
+      # JS/Wasm/AWT root descriptor, keeping the latter's overlapping metadata variants intact.
+      - name: Merge and verify skiko Linux module metadata
+        run: |
+          python3 compose-multiplatform-core/.github/scripts/merge-gradle-module-metadata.py \
+            skiko/skiko/build/publications/kotlinMultiplatform/module.json \
+            "$HOME/.m2/repository" \
+            --require-variant linuxX64ApiElements-published \
+            --require-variant linuxArm64ApiElements-published
+
+          python3 - "$HOME/.m2/repository" \
+            skiko/skiko/build/publications/kotlinMultiplatform/module.json <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          repository = Path(sys.argv[1])
+          generated = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+          component = generated["component"]
+          group = component["group"]
+          artifact = component["module"]
+          version = component["version"]
+          group_path = repository.joinpath(*group.split("."))
+          root_module = group_path / artifact / version / f"{artifact}-{version}.module"
+          root = json.loads(root_module.read_text(encoding="utf-8"))
+          root_variants = {variant["name"]: variant for variant in root["variants"]}
+          forbidden_variants = sorted(
+              name for name in root_variants if name.startswith("mingwX64")
+          )
+          if forbidden_variants:
+              raise SystemExit(
+                  "Linux CI metadata must not claim the locally built GNU target: "
+                  + ", ".join(forbidden_variants)
+              )
+          stale_sidecars = list(root_module.parent.glob(root_module.name + ".*"))
+          if stale_sidecars:
+              raise SystemExit(
+                  "mutated root metadata retains invalid signature/checksum sidecars: "
+                  + ", ".join(path.name for path in stale_sidecars)
+              )
+
+          expected = {
+              "linuxX64ApiElements-published": "skiko-linuxx64",
+              "linuxArm64ApiElements-published": "skiko-linuxarm64",
+          }
+          for variant_name, target_artifact in expected.items():
+              variant = root_variants.get(variant_name)
+              if variant is None:
+                  raise SystemExit(f"{root_module} lacks {variant_name}")
+              available_at = variant.get("available-at", {})
+              if available_at.get("module") != target_artifact:
+                  raise SystemExit(
+                      f"{variant_name} points to {available_at.get('module')}, "
+                      f"not {target_artifact}"
+                  )
+              target_dir = group_path / target_artifact / version
+              target_module = target_dir / f"{target_artifact}-{version}.module"
+              klibs = list(target_dir.glob("*.klib"))
+              if not target_module.is_file() or not klibs or not all(p.stat().st_size for p in klibs):
+                  raise SystemExit(f"incomplete {target_artifact} publication in {target_dir}")
+              print(f"verified {variant_name}: {klibs[0]} ({klibs[0].stat().st_size} bytes)")
+          PY
 
       # -mac,-windows keep Apple and mingwX64 targets out: Apple belongs to publish-apple.yml, and
       # mingwX64 would demand the hand-built GNU-ABI Skia that only exists on the Windows machine.
@@ -104,6 +198,10 @@ jobs:
         run: |
           mkdir -p staging/repository
           cp -R ~/.m2/repository/io/github/archivesteak staging/repository/
+          if find staging -type d -name skiko-mingwx64 -print -quit | grep -q .; then
+            echo "Linux CI must not upload a skiko-mingwx64 publication."
+            exit 1
+          fi
           find staging -name "*.klib" | head -40
           echo "klibs: $(find staging -name '*.klib' | wc -l)"
 
