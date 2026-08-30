@@ -302,6 +302,7 @@ shadow = { module = "com.gradleup.shadow:shadow-gradle-plugin", version = "8.3.7
 skiko = { module = "io.github.archivesteak.skiko:skiko", version.ref = "skiko" }
 skikoAwt = { module = "io.github.archivesteak.skiko:skiko-awt", version.ref = "skiko" }
 skikoAwtRuntimeWindowsX64 = { module = "io.github.archivesteak.skiko:skiko-awt-runtime-windows-x64", version.ref = "skiko" }
+skikoWasmJs = { module = "io.github.archivesteak.skiko:skiko-wasm-js", version.ref = "skiko" }
 # Upstream skiko for the native runtimes this fork cannot produce. Building these needs a macOS
 # toolchain (absent here, and not cross-compilable) and a Linux Skia build.
 #
@@ -314,8 +315,6 @@ skikoAwtRuntimeMacOsX64 = { module = "org.jetbrains.skiko:skiko-awt-runtime-maco
 skikoAwtRuntimeWindowsArm64 = { module = "org.jetbrains.skiko:skiko-awt-runtime-windows-arm64", version.ref = "skikoUpstream" }
 skikoAwtRuntimeLinuxX64 = { module = "org.jetbrains.skiko:skiko-awt-runtime-linux-x64", version.ref = "skikoUpstream" }
 skikoAwtRuntimeLinuxArm64 = { module = "org.jetbrains.skiko:skiko-awt-runtime-linux-arm64", version.ref = "skikoUpstream" }
-skikoJsWasmRuntime = { module = "org.jetbrains.skiko:skiko-js-wasm-runtime", version.ref = "skikoUpstream" }
-skikoWasmJs = { module = "org.jetbrains.skiko:skiko-wasm-js", version.ref = "skikoUpstream" }
 spdxGradlePluginz = { module = "org.spdx:spdx-gradle-plugin", version.ref = "spdxGradlePlugin" }
 sqldelightAndroid = { module = "com.squareup.sqldelight:android-driver", version.ref = "sqldelight" }
 sqldelightCoroutinesExt = { module = "com.squareup.sqldelight:coroutines-extensions", version.ref = "sqldelight" }

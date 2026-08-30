@@ -17,27 +17,18 @@
 @file:OptIn(ExperimentalWasmDsl::class)
 
 import java.util.*
+import kotlin.collections.map
 import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
+import org.jetbrains.kotlin.gradle.plugin.KotlinCompilation
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
 import org.jetbrains.kotlin.gradle.plugin.mpp.NativeBuildType
+import org.jetbrains.kotlin.gradle.targets.js.ir.KotlinJsIrTarget
 import org.jetbrains.kotlin.gradle.targets.js.webpack.KotlinWebpackConfig
 
 plugins {
     id("AndroidXComposePlugin")
     id("kotlin-multiplatform")
     alias(libs.plugins.kotlinSerialization)
-}
-
-val resourcesDir = layout.buildDirectory.get().asFile.resolve("resources")
-val skikoWasm = configurations.findByName("skikoWasm") ?: configurations.create("skikoWasm")
-
-dependencies {
-    skikoWasm(libs.skikoJsWasmRuntime)
-}
-
-val unzipTask = tasks.register("unzipWasm", Copy::class) {
-    destinationDir = file(resourcesDir)
-    from(skikoWasm.map { zipTree(it) })
 }
 
 kotlin {
@@ -171,8 +162,6 @@ kotlin {
 
         val webMain by getting {
             dependsOn(skikoMain)
-            resources.setSrcDirs(resources.srcDirs)
-            resources.srcDirs(unzipTask.map { it.destinationDir })
 
             dependencies {
                 implementation(libs.kotlinSerializationJson)
@@ -190,6 +179,8 @@ kotlin {
         val macosMain by getting { dependsOn(darwinMain) }
         val iosMain by getting { dependsOn(darwinMain) }
     }
+
+    targets.withType<KotlinJsIrTarget>().all { configureSkikoWebRuntime(project, this) }
 }
 
 enum class Target(val simulator: Boolean, val key: String) {
@@ -278,4 +269,54 @@ project.tasks.withType<org.jetbrains.kotlin.gradle.dsl.KotlinJsCompile>().config
         "-Xwasm-generate-wat",
         "-Xwasm-enable-array-range-checks"
     )
+}
+
+private fun configureSkikoWebRuntime(
+    project: Project,
+    target: KotlinJsIrTarget,
+) {
+    val titledTargetName = target.name.replaceFirstChar { it.titlecase() }
+    val mainCompilation = target.compilations.findByName(KotlinCompilation.MAIN_COMPILATION_NAME)!!
+    val runtimeDepsConfig = project.configurations.findByName(
+        mainCompilation.runtimeDependencyConfigurationName
+    )!!
+    val skikoWebRuntimeJarFiles = runtimeDepsConfig.incoming.artifactView {
+        @Suppress("UnstableApiUsage")
+        withVariantReselection()
+        attributes {
+            runtimeDepsConfig.attributes.keySet().forEach {
+                @Suppress("UNCHECKED_CAST")
+                attribute(it as Attribute<Any>, runtimeDepsConfig.attributes.getAttribute(it) as Any)
+            }
+            attribute(Usage.USAGE_ATTRIBUTE, project.objects.named(Usage::class.java, "skiko-runtime"))
+        }
+    }.files
+    val unpackedRuntimeDir = project.layout.buildDirectory.dir("compose/skiko-${target.name}-runtime")
+
+    val unpackRuntime = project.tasks.register(
+        "unpackSkikoRuntimeFor$titledTargetName",
+        Copy::class.java
+    ) {
+        destinationDir = project.file(unpackedRuntimeDir)
+        from(skikoWebRuntimeJarFiles.map { artifact -> project.zipTree(artifact) })
+    }
+
+    target.compilations.all {
+        if (target.wasmTargetType != null) {
+            // Kotlin/Wasm imports skiko through skiko.mjs; let webpack include it in its output.
+            binaries.all {
+                linkSyncTask.configure {
+                    dependsOn(unpackRuntime)
+                    from.from(unpackedRuntimeDir)
+                }
+            }
+        } else {
+            // Kotlin/JS sees Skiko as a global, so copy its runtime beside the application resources.
+            project.tasks.named(processResourcesTaskName, ProcessResources::class.java) {
+                from(unpackedRuntimeDir)
+                dependsOn(unpackRuntime)
+                exclude("META-INF")
+            }
+        }
+    }
 }
