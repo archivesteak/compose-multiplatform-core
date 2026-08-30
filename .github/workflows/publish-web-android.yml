@@ -53,6 +53,14 @@ jobs:
       - name: Point the build at the Android SDK
         run: echo "sdk.dir=$ANDROID_HOME" > compose-multiplatform-core/local.properties
 
+      # Keeping skiko's AWT publication enabled makes its root Gradle module metadata usable by
+      # Compose's desktop compilations. On Linux, configuring the JVM bindings queries dbus-1 via
+      # pkg-config; this is the same prerequisite installed by skiko's own Web CI job.
+      - name: Install skiko Linux prerequisites
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y libdbus-1-dev
+
       # skiko's web targets link a wasm side module with emcc. Upstream pins Emscripten 4.0.7
       # (skiko/.github/workflows/tests.yml); only its bin directory goes on PATH.
       - name: Install Emscripten
