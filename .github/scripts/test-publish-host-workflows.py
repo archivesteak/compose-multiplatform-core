@@ -62,8 +62,15 @@ class PublishHostWorkflowsTest(unittest.TestCase):
             with self.subTest(owner=owner):
                 self.assertIn(":publishToMavenLocal", text)
         web = texts["web"]
-        self.assertIn("-Pskiko.awt.enabled=true", web)
-        self.assertNotIn("-Pskiko.awt.enabled=false", web)
+        web_targets = web.split(
+            "- name: Build and publish skiko (js + wasmJs + Android)", 1
+        )[1].split("- name: Verify skiko web and Android publications", 1)[0]
+        linux_targets = web.split(
+            "- name: Build and publish skiko (linuxX64 + linuxArm64)", 1
+        )[1].split("- name: Merge and verify skiko Linux module metadata", 1)[0]
+        self.assertIn("-Pskiko.awt.enabled=false", web_targets)
+        self.assertNotIn("-Pskiko.awt.enabled=true", web_targets)
+        self.assertIn("-Pskiko.awt.enabled=true", linux_targets)
         self.assertIn("publishLinuxArm64PublicationToMavenLocal", web)
         self.assertIn("publishLinuxX64PublicationToMavenLocal", web)
 
