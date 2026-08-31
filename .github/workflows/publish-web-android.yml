@@ -114,19 +114,26 @@ jobs:
           echo "$PWD/emsdk/upstream/emscripten" >> "$GITHUB_PATH"
 
       # skiko must land in mavenLocal first: the Compose fork's js/wasmJs sources resolve it from
-      # there by coordinate. skiko.wasm.enabled gates both web targets. This shard owns only web
-      # and Android, so disable AWT explicitly; the Windows shard owns the JVM/AWT variants and the
-      # strict final union combines the disjoint root metadata. deploy.release=true withholds the
+      # there by coordinate. Android shares skiko's jvmMain source set, which is configured only
+      # when AWT is enabled, but this shard must not build or publish the host AWT binary. Invoke
+      # only the root, web, Android and Android-runtime publications; the Windows shard owns AWT and
+      # the strict final union combines their disjoint metadata. deploy.release=true withholds the
       # -SNAPSHOT suffix, matching the version the Windows publish and the Compose fork both use.
       - name: Build and publish skiko (js + wasmJs + Android)
         working-directory: skiko/skiko
         run: |
-          ./gradlew --no-daemon :publishToMavenLocal \
+          ./gradlew --no-daemon \
+            :publishKotlinMultiplatformPublicationToMavenLocal \
+            :publishAndroidPublicationToMavenLocal \
+            :publishJsPublicationToMavenLocal \
+            :publishWasmJsPublicationToMavenLocal \
+            :publishSkikoJvmRuntimeAndroidX64PublicationToMavenLocal \
+            :publishSkikoJvmRuntimeAndroidArm64PublicationToMavenLocal \
             -Dmaven.repo.local="$MAVEN_REPOSITORY" \
             -Pdeploy.release=true \
             -Pskiko.wasm.enabled=true \
             -Pskiko.android.enabled=true \
-            -Pskiko.awt.enabled=false \
+            -Pskiko.awt.enabled=true \
             -Pskiko.native.mingw.enabled=false
 
       - name: Verify skiko web and Android publications

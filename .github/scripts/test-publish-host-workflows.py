@@ -58,7 +58,8 @@ class PublishHostWorkflowsTest(unittest.TestCase):
 
     def test_skiko_scope_and_linux_common_metadata_fix_are_explicit(self) -> None:
         texts = self.texts()
-        for owner, text in texts.items():
+        for owner in ("apple", "windows"):
+            text = texts[owner]
             with self.subTest(owner=owner):
                 self.assertIn(":publishToMavenLocal", text)
         web = texts["web"]
@@ -68,8 +69,17 @@ class PublishHostWorkflowsTest(unittest.TestCase):
         linux_targets = web.split(
             "- name: Build and publish skiko (linuxX64 + linuxArm64)", 1
         )[1].split("- name: Merge and verify skiko Linux module metadata", 1)[0]
-        self.assertIn("-Pskiko.awt.enabled=false", web_targets)
-        self.assertNotIn("-Pskiko.awt.enabled=true", web_targets)
+        self.assertIn("-Pskiko.awt.enabled=true", web_targets)
+        self.assertNotIn(":publishToMavenLocal", web_targets)
+        for publication in (
+            "KotlinMultiplatform",
+            "Android",
+            "Js",
+            "WasmJs",
+            "SkikoJvmRuntimeAndroidX64",
+            "SkikoJvmRuntimeAndroidArm64",
+        ):
+            self.assertIn(f":publish{publication}PublicationToMavenLocal", web_targets)
         self.assertIn("-Pskiko.awt.enabled=true", linux_targets)
         self.assertIn("publishLinuxArm64PublicationToMavenLocal", web)
         self.assertIn("publishLinuxX64PublicationToMavenLocal", web)
