@@ -355,7 +355,10 @@ jobs:
       - name: Verify Compose web runtime integration
         working-directory: compose-multiplatform-core
         run: |
-          ./gradlew --no-daemon \
+          # The AndroidX plugin registers cross-project afterEvaluate hooks. Gradle's parallel
+          # configuration cache/configure-on-demand modes cannot configure this multi-project
+          # verification graph safely; the repository's web-test workflow disables the same modes.
+          ./gradlew --no-daemon --no-parallel --no-configuration-cache --no-configure-on-demand \
             -Dmaven.repo.local="$MAVEN_REPOSITORY" \
             -Pcompose.platforms=js,wasmJs,android \
             -Pandroidx.enabled.kmp.target.platforms=-mac,-windows \
