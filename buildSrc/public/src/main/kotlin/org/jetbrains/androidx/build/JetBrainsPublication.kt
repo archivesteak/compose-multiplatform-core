@@ -50,7 +50,7 @@ object JetBrainsPublication {
                 supportedPlatforms = ComposePlatforms.SKIKO_SUPPORT,
             ),
             ComposeComponent(":compose:ui:ui-graphics"),
-            ComposeComponent(":compose:ui:ui-test", supportedPlatforms = ComposePlatforms.SKIKO_SUPPORT_NO_MINGW),
+            ComposeComponent(":compose:ui:ui-test", supportedPlatforms = ComposePlatforms.SKIKO_SUPPORT),
             ComposeComponent(
                 ":compose:ui:ui-test-junit4",
                 supportedPlatforms = ComposePlatforms.JVM_BASED

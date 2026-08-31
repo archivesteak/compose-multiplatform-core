@@ -33,6 +33,125 @@ tasks.register("publishComposeJbToMavenLocal", ComposePublishingTask::class) {
     }
 }
 
+// The Windows consumer graph is intentionally explicit. The family aggregate above also includes
+// modules and host publications that are not part of the Windows artifact shard, while omitting a
+// root publication referenced from a POM makes the fail-closed merger reject the shard.
+val windowsAndDesktopClosureProjects = listOf(
+    ":compose:animation:animation",
+    ":compose:animation:animation-core",
+    ":compose:foundation:foundation",
+    ":compose:foundation:foundation-layout",
+    ":compose:material:material-ripple",
+    ":compose:material3:material3",
+    ":compose:runtime:runtime",
+    ":compose:runtime:runtime-saveable",
+    ":compose:ui:ui",
+    ":compose:ui:ui-backhandler",
+    ":compose:ui:ui-geometry",
+    ":compose:ui:ui-graphics",
+    ":compose:ui:ui-test",
+    ":compose:ui:ui-text",
+    ":compose:ui:ui-unit",
+    ":compose:ui:ui-util",
+    ":navigationevent:navigationevent-compose",
+)
+
+val desktopOnlyClosureProjects = listOf(
+    ":compose:material:material",
+    ":compose:ui:ui-tooling-preview",
+)
+
+val desktopDistributionProject = ":compose:desktop:desktop"
+
+// ui-uikit's root is referenced by common POM metadata. Its Apple children belong to the Apple
+// shard, but the root must exist here so Maven closure validation remains complete.
+val metadataOnlyClosureProjects = listOf(":compose:ui:ui-uikit")
+
+val windowsConsumerClosureProjects =
+    windowsAndDesktopClosureProjects +
+        desktopOnlyClosureProjects +
+        desktopDistributionProject +
+        metadataOnlyClosureProjects
+
+// Cross-host shards publish the same Maven-closed KMP graph as Windows, but only for the variants
+// that host owns. ui-uikit is an iOS-only consumer root, so it belongs only to the Apple shard.
+// Keeping these lists explicit prevents the family-wide publisher from pulling unrelated modules
+// (and their independent release trains) into a release just because they share a library family.
+val appleConsumerClosureProjects = windowsAndDesktopClosureProjects + metadataOnlyClosureProjects
+val webAndroidConsumerClosureProjects = windowsAndDesktopClosureProjects
+
+tasks.register("publishWindowsConsumerClosureToMavenLocal") {
+    group = "Compose Multiplatform"
+    description = "Publishes the exact Maven-closed JVM and mingwX64 Compose consumer graph."
+
+    windowsConsumerClosureProjects.forEach { projectPath ->
+        dependsOn("$projectPath:publishKotlinMultiplatformPublicationToMavenLocal")
+        dependsOn("$projectPath:jbVerifyDependencyVersions")
+    }
+
+    windowsAndDesktopClosureProjects.forEach { projectPath ->
+        dependsOn("$projectPath:publishMingwX64PublicationToMavenLocal")
+        dependsOn("$projectPath:publishDesktopPublicationToMavenLocal")
+    }
+
+    desktopOnlyClosureProjects.forEach { projectPath ->
+        dependsOn("$projectPath:publishDesktopPublicationToMavenLocal")
+    }
+
+    dependsOn("$desktopDistributionProject:publishJvmPublicationToMavenLocal")
+    dependsOn("$desktopDistributionProject:publishJvmwindows-x64PublicationToMavenLocal")
+}
+
+fun registerHostConsumerClosureTask(
+    name: String,
+    description: String,
+    projectPaths: List<String>,
+    ownedPlatforms: Set<ComposePlatforms>,
+) {
+    tasks.register(name, ComposePublishingTask::class) {
+        group = "Compose Multiplatform"
+        this.description = description
+        repository = "MavenLocal"
+        composeProperties = parsedComposeProperties
+
+        projectPaths.forEach { projectPath ->
+            val component = requireNotNull(JetBrainsPublication.projectPathToComponent[projectPath]) {
+                "No registered Compose publication component for $projectPath"
+            }
+            // The root KMP publication is always emitted. Restrict child publications even if a
+            // caller accidentally supplies a broader compose.platforms property.
+            publish(
+                rootProject,
+                component.copy(
+                    supportedPlatforms = component.supportedPlatforms.intersect(ownedPlatforms)
+                )
+            )
+        }
+    }
+}
+
+registerHostConsumerClosureTask(
+    name = "publishAppleConsumerClosureToMavenLocal",
+    description = "Publishes the exact Maven-closed macOS and iOS Compose consumer graph.",
+    projectPaths = appleConsumerClosureProjects,
+    ownedPlatforms = setOf(
+        ComposePlatforms.MacosArm64,
+        ComposePlatforms.IosArm64,
+        ComposePlatforms.IosSimulatorArm64,
+    ),
+)
+
+registerHostConsumerClosureTask(
+    name = "publishWebAndroidConsumerClosureToMavenLocal",
+    description = "Publishes the exact Maven-closed JS, WasmJS, and Android Compose consumer graph.",
+    projectPaths = webAndroidConsumerClosureProjects,
+    ownedPlatforms = setOf(
+        ComposePlatforms.Js,
+        ComposePlatforms.WasmJs,
+        ComposePlatforms.Android,
+    ),
+)
+
 val libraries = project.findProperty("jetbrains.publication.libraries")
     ?.toString()?.split(",")
     ?: libraryToComponents.keys

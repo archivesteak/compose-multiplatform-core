@@ -6,6 +6,9 @@ on:
     branches:
       - jb-main
 
+permissions:
+  contents: read
+
 env:
   # TODO: https://youtrack.jetbrains.com/issue/CMP-9497/Investgate-CfW-tests-flakiness-with-enabled-gradle-configuration-cache-on-CI
   # Web Tests require running additional processes: karma in node, browser;
@@ -21,7 +24,9 @@ jobs:
     name: Compose Desktop Tests
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup Prerequisites
         uses: ./.github/actions/setup-prerequisites
@@ -37,7 +42,7 @@ jobs:
             --no-daemon --stacktrace
 
       - name: Upload Screenshots
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:
           name: screenshot-tests
@@ -46,7 +51,7 @@ jobs:
             golden/**/*_diff.png
 
       - name: Test Summary
-        uses: test-summary/action@v2
+        uses: test-summary/action@37b508cfee6d4d080eedd00b5bb240a6a784a6a5 # v2.6
         with:
           paths: "out/**/build/test-results/**/TEST-*.xml"
         if: always()
@@ -58,7 +63,9 @@ jobs:
       GRADLE_OPTS: -Xmx12g -Dorg.gradle.daemon=false
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup Prerequisites
         uses: ./.github/actions/setup-prerequisites
@@ -73,7 +80,7 @@ jobs:
             --no-daemon --stacktrace
 
       - name: Test Summary
-        uses: test-summary/action@v2
+        uses: test-summary/action@37b508cfee6d4d080eedd00b5bb240a6a784a6a5 # v2.6
         with:
           paths: "out/**/build/test-results/**/TEST-*.xml"
         if: always()
@@ -85,7 +92,9 @@ jobs:
       GRADLE_OPTS: -Xmx12g -Dorg.gradle.daemon=false
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup Prerequisites
         uses: ./.github/actions/setup-prerequisites
@@ -105,7 +114,7 @@ jobs:
             -destination 'platform=iOS Simulator,name=iPhone 17,OS=26.5'
 
       - name: Upload Test Results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:
           name: TestResults-${{ github.run_number }}.xcresult
@@ -150,7 +159,9 @@ jobs:
       GRADLE_OPTS: -Xmx12g -Dorg.gradle.daemon=false
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup iOS Instrumented Test Environment
         id: setup-ios-instrumented-test-environment
@@ -173,14 +184,14 @@ jobs:
             -destination 'platform=iOS Simulator,id=${{ steps.setup-ios-instrumented-test-environment.outputs.simulator-id }}'
 
       - name: Upload Test Results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:
           name: TestResults-${{ github.run_number }}-${{ matrix.runtime }}-${{ matrix.device_type }}.xcresult
           path: compose/ui/ui/src/uikitInstrumentedTest/launcher/TestResults.xcresult
 
       - name: Test Summary
-        uses: test-summary/action@v2
+        uses: test-summary/action@37b508cfee6d4d080eedd00b5bb240a6a784a6a5 # v2.6
         with:
           paths: "**/reports/junit.xml"
         if: always()
@@ -195,13 +206,15 @@ jobs:
         task: [ 'Js', 'Wasm' ]
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup Prerequisites
         uses: ./.github/actions/setup-prerequisites
 
       - name: Setup Google Chrome
-        uses: browser-actions/setup-chrome@v2
+        uses: browser-actions/setup-chrome@48ad923757ca74d66703209fe939badbdf80f2f4 # v2.2.0
         id: setup-chrome
         with:
           chrome-version: ${{ matrix.chrome }}
@@ -241,7 +254,7 @@ jobs:
 
       - name: Top memory consumers
         run: |
-          ps -eo pid,ppid,cmd,%mem,%cpu --sort=-%mem | head -n 15
+          ps -eo pid,ppid,cmd,%mem,%cpu --sort=-%mem | sed -n '1,15p'
 
       - name: Run Web Chrome Tests
         run: |
@@ -269,10 +282,10 @@ jobs:
       - name: Post-test top memory consumers
         if: always()
         run: |
-          ps -eo pid,ppid,cmd,%mem,%cpu --sort=-%mem | head -n 15
+          ps -eo pid,ppid,cmd,%mem,%cpu --sort=-%mem | sed -n '1,15p'
 
       - name: Test Summary
-        uses: test-summary/action@v2
+        uses: test-summary/action@37b508cfee6d4d080eedd00b5bb240a6a784a6a5 # v2.6
         with:
           paths: "out/**/build/test-results/**/TEST-*.xml"
         if: always()
@@ -288,7 +301,9 @@ jobs:
         task: [ 'Wasm' ] # excluded Js for Firefox due to high flakiness
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup Prerequisites
         uses: ./.github/actions/setup-prerequisites
@@ -318,7 +333,7 @@ jobs:
           sudo apt-get install libdbus-glib-1-2 -y
 
       - name: Setup Firefox
-        uses: browser-actions/setup-firefox@v1
+        uses: browser-actions/setup-firefox@0bc507ddf224827e3b1af68e014d5e42ab93e795 # v1.7.2
         with:
           firefox-version: ${{ matrix.firefox }}
 
@@ -336,7 +351,7 @@ jobs:
 
       - name: Top memory consumers
         run: |
-          ps -eo pid,ppid,cmd,%mem,%cpu --sort=-%mem | head -n 15
+          ps -eo pid,ppid,cmd,%mem,%cpu --sort=-%mem | sed -n '1,15p'
 
       - name: Run Web Firefox Tests
         run: |
@@ -353,7 +368,7 @@ jobs:
             -Pjetbrains.androidx.web.tests.enableChrome=false
 
       - name: Test Summary
-        uses: test-summary/action@v2
+        uses: test-summary/action@37b508cfee6d4d080eedd00b5bb240a6a784a6a5 # v2.6
         with:
           paths: "out/**/build/test-results/**/TEST-*.xml"
         if: always()

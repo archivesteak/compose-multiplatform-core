@@ -18,6 +18,8 @@
 
 package androidx.compose.ui.win32
 
+import androidx.compose.ui.platform.makeSynchronizedObject
+import androidx.compose.ui.platform.synchronized
 import kotlinx.cinterop.CFunction
 import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.ExperimentalForeignApi
@@ -25,10 +27,10 @@ import kotlinx.cinterop.invoke
 import kotlinx.cinterop.reinterpret
 import platform.windows.GetDC
 import platform.windows.GetDeviceCaps
+import platform.windows.GetModuleHandleW
 import platform.windows.GetProcAddress
 import platform.windows.HWND
 import platform.windows.LOGPIXELSY
-import platform.windows.LoadLibraryW
 import platform.windows.ReleaseDC
 import platform.windows.SetProcessDPIAware
 
@@ -46,7 +48,9 @@ private object Win32Dpi {
     /** `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2`, a sentinel handle rather than a real pointer. */
     private const val PER_MONITOR_AWARE_V2 = -4L
 
-    private val user32 by lazy { LoadLibraryW(USER32) }
+    // user32 is already loaded by every process with a window. GetModuleHandle does not increment
+    // its loader reference count, so this process-lifetime cache has nothing to release.
+    private val user32 by lazy { GetModuleHandleW(USER32) }
 
     private val getDpiForWindow: CPointer<CFunction<(HWND?) -> UInt>>? by lazy {
         user32?.let { GetProcAddress(it, "GetDpiForWindow") }?.reinterpret()
@@ -57,6 +61,19 @@ private object Win32Dpi {
         user32?.let { GetProcAddress(it, "SetProcessDpiAwarenessContext") }?.reinterpret()
     }
 
+    private val getWindowDpiAwarenessContext:
+        CPointer<CFunction<(HWND?) -> Long>>? by lazy {
+        user32?.let { GetProcAddress(it, "GetWindowDpiAwarenessContext") }?.reinterpret()
+    }
+
+    private val areDpiAwarenessContextsEqual:
+        CPointer<CFunction<(Long, Long) -> Int>>? by lazy {
+        user32?.let { GetProcAddress(it, "AreDpiAwarenessContextsEqual") }?.reinterpret()
+    }
+
+    private val initializationLock = makeSynchronizedObject(this)
+    private var isProcessAwarenessInitialized = false
+
     /**
      * Opts the process into per-monitor-v2 awareness, so Windows reports real pixels on every
      * monitor and sends `WM_DPICHANGED` when a window moves between them. Falls back to
@@ -64,10 +81,23 @@ private object Win32Dpi {
      *
      * Must run before the first window is created.
      */
-    fun markProcessDpiAware() {
-        val setContext = setProcessDpiAwarenessContext
-        if (setContext != null && setContext(PER_MONITOR_AWARE_V2) != 0) return
-        SetProcessDPIAware()
+    fun ensureProcessDpiAwareness() {
+        synchronized(initializationLock) {
+            if (isProcessAwarenessInitialized) return
+            val setContext = setProcessDpiAwarenessContext
+            if (setContext == null || setContext(PER_MONITOR_AWARE_V2) == 0) {
+                SetProcessDPIAware()
+            }
+            // Win32 does not allow process DPI mode to change after it has been selected. Mark the
+            // attempt complete even if a manifest or embedding host selected the mode first.
+            isProcessAwarenessInitialized = true
+        }
+    }
+
+    fun isWindowPerMonitorAwareV2(hwnd: HWND): Boolean? {
+        val getContext = getWindowDpiAwarenessContext ?: return null
+        val areEqual = areDpiAwarenessContextsEqual ?: return null
+        return areEqual(getContext(hwnd), PER_MONITOR_AWARE_V2) != 0
     }
 
     /** The DPI of the monitor [hwnd] is on, or the system DPI if per-window DPI is unavailable. */
@@ -91,8 +121,12 @@ private object Win32Dpi {
 /** Windows' reference DPI: a scale factor of 1.0. */
 internal const val DEFAULT_DPI = 96
 
-/** @see Win32Dpi.markProcessDpiAware */
-internal fun markProcessDpiAware() = Win32Dpi.markProcessDpiAware()
+/** Must be called before any HWND owned by this library is created. */
+internal fun ensureProcessDpiAwareness() = Win32Dpi.ensureProcessDpiAwareness()
+
+/** Returns null only on Windows versions that predate DPI awareness contexts. */
+internal fun isWindowPerMonitorAwareV2(hwnd: HWND): Boolean? =
+    Win32Dpi.isWindowPerMonitorAwareV2(hwnd)
 
 /** Scale factor for the monitor [hwnd] is on: 96 DPI is 1.0. */
 internal fun windowScale(hwnd: HWND?): Float = Win32Dpi.dpiFor(hwnd).toFloat() / DEFAULT_DPI

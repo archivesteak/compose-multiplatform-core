@@ -34,3 +34,8 @@ internal expect fun isOnUiThread(): Boolean
  * On targets that don't support this, should throw an [UnsupportedOperationException].
  */
 internal expect fun sleep(timeMillis: Long)
+
+/** Acquires/releases any platform-owned UI execution resource for one test scene. */
+internal expect fun acquireTestUiThread()
+
+internal expect fun releaseTestUiThread()

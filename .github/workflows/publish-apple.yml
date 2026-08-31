@@ -1,7 +1,9 @@
 name: Publish Apple variants
 
 # Fills the one gap a Windows machine physically cannot: Kotlin/Native has no cross-compiler for
-# Apple targets, so macosArm64/iosArm64/iosSimulatorArm64 klibs can only be produced on macOS.
+# Apple targets, so macOS and iOS klibs can only be produced on macOS. Compose publishes the
+# consumer targets macosArm64/iosArm64/iosSimulatorArm64; Skiko's macOS switch truthfully emits
+# both macosX64 and macosArm64.
 # Everything else (mingwX64, desktop JVM) is built locally on Windows and is not duplicated here.
 #
 # Why this is cheap: skiko downloads *prebuilt* Skia per platform (dependencies.skia in
@@ -15,10 +17,12 @@ name: Publish Apple variants
 on:
   workflow_dispatch:
     inputs:
+      compose_ref:
+        description: "Full 40-character commit SHA of archivesteak/compose-multiplatform-core to build"
+        required: true
       skiko_ref:
-        description: "Branch/tag/SHA of archivesteak/skiko to build"
-        required: false
-        default: e47cfeacce42ffd31b8d8d4b7d44d40e9b0b2305
+        description: "Full 40-character commit SHA of archivesteak/skiko to build"
+        required: true
 
 # Checkout is the only operation that needs the workflow token. It is read-only and is not kept in
 # either checkout, so this artifact-only job has no credential capable of pushing a repository.
@@ -27,33 +31,71 @@ permissions:
 
 jobs:
   apple:
-    # macos-14 and later are arm64 runners, which is what macosArm64 needs as a host.
+    # Kotlin/Native can emit each requested Apple target from this macOS host; the host CPU does
+    # not need to match the target CPU. Keep this runner pinned for reproducible tool availability.
     runs-on: macos-14
     timeout-minutes: 90
+    env:
+      MAVEN_REPOSITORY: ${{ github.workspace }}/producer-maven/repository
 
     steps:
+      - name: Validate requested source revisions
+        env:
+          COMPOSE_REF: ${{ inputs.compose_ref }}
+          SKIKO_REF: ${{ inputs.skiko_ref }}
+        run: |
+          for declaration in "compose_ref=$COMPOSE_REF" "skiko_ref=$SKIKO_REF"; do
+            name=${declaration%%=*}
+            value=${declaration#*=}
+            if [[ ! "$value" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "$name must be a full lowercase 40-character commit SHA"
+              exit 1
+            fi
+          done
+
       - name: Check out the Compose fork
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.compose_ref }}
           path: compose-multiplatform-core
           persist-credentials: false
 
+      - name: Verify the checked-out Compose revision
+        env:
+          COMPOSE_REF: ${{ inputs.compose_ref }}
+        run: |
+          resolved=$(git -C compose-multiplatform-core rev-parse HEAD)
+          if [ "$resolved" != "$COMPOSE_REF" ]; then
+            echo "Compose checkout resolved to $resolved, expected $COMPOSE_REF"
+            exit 1
+          fi
+
       - name: Check out the skiko fork
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: archivesteak/skiko
-          ref: ${{ inputs.skiko_ref || 'e47cfeacce42ffd31b8d4b7d44d40e9b0b2305' }}
+          ref: ${{ inputs.skiko_ref }}
           path: skiko
           persist-credentials: false
 
+      - name: Verify the checked-out skiko revision
+        env:
+          SKIKO_REF: ${{ inputs.skiko_ref }}
+        run: |
+          resolved=$(git -C skiko rev-parse HEAD)
+          if [ "$resolved" != "$SKIKO_REF" ]; then
+            echo "skiko checkout resolved to $resolved, expected $SKIKO_REF"
+            exit 1
+          fi
+
       - name: Set up JDK 21
-        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
         with:
           distribution: temurin
           java-version: "21"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
 
       # The default Xcode on the runner image is too old for the uikit ObjC sources: they call
       # UIAccessibilityElement.accessibilityHitTest, declared only in newer iOS SDKs. Select the
@@ -81,7 +123,8 @@ jobs:
       - name: Build and publish skiko (Apple targets)
         working-directory: skiko/skiko
         run: |
-          ./gradlew --no-daemon publishToMavenLocal \
+          ./gradlew --no-daemon :publishToMavenLocal \
+            -Dmaven.repo.local="$MAVEN_REPOSITORY" \
             -Pdeploy.release=true \
             -Pskiko.native.mac.enabled=true \
             -Pskiko.native.ios.arm64.enabled=true \
@@ -91,8 +134,9 @@ jobs:
       - name: Verify skiko Apple publications
         run: |
           python3 compose-multiplatform-core/.github/scripts/verify-maven-kmp-publications.py \
-            "$HOME/.m2/repository" \
+            "$MAVEN_REPOSITORY" \
             --coordinate io.github.archivesteak.skiko:skiko:0.151.0-alpha04-mingw \
+            --target macosX64=.klib \
             --target macosArm64=.klib \
             --target iosArm64=.klib \
             --target iosSimulatorArm64=.klib \
@@ -103,26 +147,42 @@ jobs:
       - name: Build and publish the Compose fork (Apple variants)
         working-directory: compose-multiplatform-core
         run: |
-          ./gradlew --no-daemon publishComposeJbToMavenLocal \
+          ./gradlew --no-daemon :mpp:publishAppleConsumerClosureToMavenLocal \
+            -Dmaven.repo.local="$MAVEN_REPOSITORY" \
             -Pcompose.platforms=macosarm64,iosarm64,iossimulatorarm64 \
-            -Pandroidx.enabled.kmp.target.platforms=-js,-wasm,-windows \
-            -Pjetbrains.publication.libraries=COMPOSE,COMPOSE_MATERIAL3
+            -Pandroidx.enabled.kmp.target.platforms=-js,-wasm,-windows
 
-      # Ship only this fork's own coordinates. Everything else in ~/.m2 is upstream cache and must
-      # not be handed back, or unzipping the artifact would overwrite good local artifacts.
+      # Ship only this fork's coordinates from the isolated producer repository. The following
+      # allowlist is still enforced so a future build-logic change cannot silently widen the shard.
       - name: Collect the published artifacts
         run: |
           mkdir -p staging/repository/io/github/archivesteak
+          python3 compose-multiplatform-core/.github/scripts/write-provenance.py \
+            --owner apple \
+            --output staging/repository/provenance/apple.json \
+            --source "compose=$(git -C compose-multiplatform-core rev-parse HEAD)" \
+            --source "skiko=$(git -C skiko rev-parse HEAD)"
           # Skiko's *-runtime-all jars contain only the current host's native library in a local
           # build. Two jobs would therefore produce different bytes at one coordinate, which cannot
           # be union-merged. Consumers use the per-OS artifacts; omit the misleading fat jars.
           rsync -a \
             --exclude='skiko/skiko-awt-runtime-all/' \
-            --exclude='skiko/skiko-skottie-awt-runtime-all/' \
-            ~/.m2/repository/io/github/archivesteak/ \
+            "$MAVEN_REPOSITORY/io/github/archivesteak/" \
             staging/repository/io/github/archivesteak/
-          unexpected=$(find staging/repository/io/github/archivesteak -mindepth 1 -maxdepth 1 -type d \
-            ! -name compose ! -name skiko -print)
+          # Root descriptors are generated from every configured target, while this producer
+          # intentionally publishes only its host-owned subset. Remove variants whose redirect or
+          # direct fork dependency is absent so the shard cannot make false availability claims.
+          python3 compose-multiplatform-core/.github/scripts/prune-missing-kmp-redirects.py \
+            staging/repository \
+            --close-group-prefix io.github.archivesteak
+          unexpected=$(
+            find staging/repository/io/github/archivesteak -mindepth 1 -maxdepth 1 -type d \
+              ! -name compose ! -name skiko ! -name androidx -print
+            find staging/repository/io/github/archivesteak/androidx -mindepth 1 -maxdepth 1 \
+              -type d ! -name navigationevent -print
+            find staging/repository/io/github/archivesteak/androidx/navigationevent \
+              -mindepth 1 -maxdepth 1 -type d ! -name navigationevent-compose -print
+          )
           if [ -n "$unexpected" ]; then
             echo "Unexpected library families in scoped artifact:"
             echo "$unexpected"
@@ -133,17 +193,19 @@ jobs:
             exit 1
           fi
           test ! -e staging/repository/io/github/archivesteak/skiko/skiko-awt-runtime-all
-          test ! -e staging/repository/io/github/archivesteak/skiko/skiko-skottie-awt-runtime-all
           for runtime in \
             skiko-awt-runtime-macos-arm64 \
-            skiko-awt-runtime-macos-x64 \
-            skiko-skottie-awt-runtime-macos-arm64 \
-            skiko-skottie-awt-runtime-macos-x64; do
+            skiko-awt-runtime-macos-x64; do
             test -n "$(find "staging/repository/io/github/archivesteak/skiko/$runtime" -name '*.jar' -size +0c -print -quit)"
           done
           test -f staging/repository/io/github/archivesteak/compose/runtime/runtime/1.12.0-beta02-mingw/runtime-1.12.0-beta02-mingw.module
+          test -f staging/repository/io/github/archivesteak/compose/ui/ui-test/1.12.0-beta02-mingw/ui-test-1.12.0-beta02-mingw.module
+          test -f staging/repository/io/github/archivesteak/compose/ui/ui-uikit/1.12.0-beta02-mingw/ui-uikit-1.12.0-beta02-mingw.module
           test -f staging/repository/io/github/archivesteak/compose/material3/material3/1.12.0-alpha03-mingw/material3-1.12.0-alpha03-mingw.module
-          find staging -name "*.klib" | head -40
+          test -f staging/repository/io/github/archivesteak/androidx/navigationevent/navigationevent-compose/1.1.1-beta01-mingw/navigationevent-compose-1.1.1-beta01-mingw.module
+          test -f staging/repository/provenance/apple.json
+          # sed consumes the complete stream, avoiding find's SIGPIPE under bash -o pipefail.
+          find staging -name "*.klib" | sed -n '1,40p'
           echo "klibs: $(find staging -name '*.klib' | wc -l)"
 
       - name: Verify collected Compose Apple publications
@@ -154,10 +216,28 @@ jobs:
             --coordinate io.github.archivesteak.compose.foundation:foundation:1.12.0-beta02-mingw \
             --coordinate io.github.archivesteak.compose.runtime:runtime:1.12.0-beta02-mingw \
             --coordinate io.github.archivesteak.compose.ui:ui:1.12.0-beta02-mingw \
+            --coordinate io.github.archivesteak.compose.ui:ui-test:1.12.0-beta02-mingw \
+            --coordinate io.github.archivesteak.androidx.navigationevent:navigationevent-compose:1.1.1-beta01-mingw \
             --target macosArm64=.klib \
             --target iosArm64=.klib \
             --target iosSimulatorArm64=.klib \
             --forbid-root-variant-prefix mingwX64
+
+          python3 compose-multiplatform-core/.github/scripts/verify-maven-dependency-closure.py \
+            staging/repository \
+            --coordinate io.github.archivesteak.androidx.navigationevent:navigationevent-compose:1.1.1-beta01-mingw \
+            --require-dependency io.github.archivesteak.compose.runtime:runtime:1.12.0-beta02-mingw \
+            --require-dependency androidx.navigationevent:navigationevent:1.1.1 \
+            --forbid-dependency-group-prefix org.jetbrains.compose
+
+          python3 compose-multiplatform-core/.github/scripts/verify-maven-kmp-publications.py \
+            staging/repository \
+            --coordinate io.github.archivesteak.compose.ui:ui-uikit:1.12.0-beta02-mingw \
+            --target iosArm64=.klib \
+            --target iosSimulatorArm64=.klib \
+            --forbid-root-variant-prefix mingwX64
+
+          python3 compose-multiplatform-core/.github/scripts/verify-upstream-navigationevent.py
 
       - name: Fail if nothing was produced
         run: |
@@ -167,7 +247,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: maven-apple
           path: staging/repository

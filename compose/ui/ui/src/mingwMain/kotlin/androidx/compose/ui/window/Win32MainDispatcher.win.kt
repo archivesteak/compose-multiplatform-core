@@ -22,10 +22,18 @@ import androidx.compose.ui.platform.makeSynchronizedObject
 import androidx.compose.ui.platform.synchronized
 import kotlin.coroutines.CoroutineContext
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.alloc
 import kotlinx.cinterop.convert
+import kotlinx.cinterop.memScoped
+import kotlinx.cinterop.ptr
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Runnable
 import platform.windows.GetCurrentThreadId
+import platform.windows.GetLastError
+import platform.windows.MSG
+import platform.windows.PM_NOREMOVE
+import platform.windows.PM_REMOVE
+import platform.windows.PeekMessageW
 import platform.windows.PostThreadMessageW
 import platform.windows.WM_APP
 
@@ -56,7 +64,29 @@ internal object Win32MainDispatcher : CoroutineDispatcher() {
      * it starts, so anything queued during start-up is delivered once it is running.
      */
     fun bindToCurrentThread() {
-        synchronized(lock) { loopThreadId = GetCurrentThreadId() }
+        // PostThreadMessage fails until the destination has created a message queue. PeekMessage
+        // creates it without consuming anything, before the thread id becomes visible to dispatch.
+        memScoped {
+            val message = alloc<MSG>()
+            PeekMessageW(message.ptr, null, 0u, 0u, PM_NOREMOVE.convert())
+        }
+        val currentThreadId = GetCurrentThreadId()
+        synchronized(lock) {
+            check(loopThreadId == 0u) {
+                "The Win32 main dispatcher is already bound to a message-loop thread"
+            }
+            loopThreadId = currentThreadId
+        }
+    }
+
+    /** Fails before native UI state can be touched from a thread that does not own the loop. */
+    fun checkCurrentThread() {
+        val currentThreadId = GetCurrentThreadId()
+        synchronized(lock) {
+            check(loopThreadId != 0u && loopThreadId == currentThreadId) {
+                "Win32 UI work must run on the bound message-loop thread"
+            }
+        }
     }
 
     override fun dispatch(context: CoroutineContext, block: Runnable) {
@@ -67,7 +97,17 @@ internal object Win32MainDispatcher : CoroutineDispatcher() {
         // Outside the lock: PostThreadMessage is thread-safe, and a task must never run holding it.
         // A zero id means the loop has not started yet; it drains the backlog when it does.
         if (threadId != 0u) {
-            PostThreadMessageW(threadId, WM_COMPOSE_DISPATCH.convert(), 0uL, 0L)
+            if (PostThreadMessageW(threadId, WM_COMPOSE_DISPATCH.convert(), 0uL, 0L) == 0) {
+                val error = GetLastError()
+                val rejected = synchronized(lock) {
+                    // If the loop unbound concurrently, the queued task is intentional backlog for
+                    // the next bind. If drain already took it, it will run without this wake-up.
+                    loopThreadId == threadId && queue.remove(block)
+                }
+                check(!rejected) {
+                    "PostThreadMessageW(WM_COMPOSE_DISPATCH) failed: $error"
+                }
+            }
         }
     }
 
@@ -79,13 +119,71 @@ internal object Win32MainDispatcher : CoroutineDispatcher() {
      * pending window messages instead of starving the loop.
      */
     fun drain() {
+        val currentThreadId = GetCurrentThreadId()
         val pending = synchronized(lock) {
+            check(loopThreadId == currentThreadId) {
+                "The Win32 main dispatcher must be drained by its message-loop thread"
+            }
             val pending = queue
             queue = ArrayDeque()
             pending
         }
+        var failure: Throwable? = null
         while (pending.isNotEmpty()) {
-            pending.removeFirst().run()
+            try {
+                pending.removeFirst().run()
+            } catch (throwable: Throwable) {
+                val first = failure
+                if (first == null) failure = throwable else first.addSuppressed(throwable)
+            }
         }
+        failure?.let { throw it }
+    }
+
+    /**
+     * Runs every task accepted by the active loop, then atomically stops accepting wake-ups for it.
+     * Tasks dispatched after the unbind become intentional backlog for the next application.
+     */
+    fun drainAndUnbindFromCurrentThread() {
+        val currentThreadId = GetCurrentThreadId()
+        var failure: Throwable? = null
+        while (true) {
+            try {
+                drain()
+            } catch (throwable: Throwable) {
+                val first = failure
+                if (first == null) failure = throwable else first.addSuppressed(throwable)
+            }
+            val unbound = synchronized(lock) {
+                check(loopThreadId == currentThreadId) {
+                    "The Win32 main dispatcher must be unbound by its message-loop thread"
+                }
+                if (queue.isEmpty()) {
+                    loopThreadId = 0u
+                    true
+                } else {
+                    false
+                }
+            }
+            if (unbound) break
+        }
+
+        // Wake messages corresponding to the tasks just drained are redundant. Remove them before
+        // a later application binds this same OS thread, without touching any other message.
+        memScoped {
+            val message = alloc<MSG>()
+            while (
+                PeekMessageW(
+                    message.ptr,
+                    null,
+                    WM_COMPOSE_DISPATCH.convert(),
+                    WM_COMPOSE_DISPATCH.convert(),
+                    PM_REMOVE.convert(),
+                ) != 0
+            ) {
+                // discard
+            }
+        }
+        failure?.let { throw it }
     }
 }

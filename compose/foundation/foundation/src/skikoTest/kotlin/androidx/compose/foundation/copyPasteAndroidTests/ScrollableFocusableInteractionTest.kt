@@ -72,8 +72,8 @@ import kotlin.test.BeforeTest
 import kotlin.test.Ignore
 import kotlin.test.Test
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
 @OptIn(ExperimentalTestApi::class)
 class ScrollableFocusableInteractionTest {
@@ -717,7 +717,7 @@ class ScrollableFocusableInteractionTest {
     private fun SkikoComposeUiTest.scrollToTop() {
         waitForIdle()
         // Reset scroll to top since requesting focus will scroll it.
-        MainScope().launch {
+        runBlocking {
             scrollState.scrollTo(if (reverseScrolling!!) -scrollState.maxValue else 0)
         }
     }

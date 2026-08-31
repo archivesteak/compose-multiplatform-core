@@ -9,8 +9,91 @@ on:
   pull_request:
     types: [opened, edited, synchronize]
 
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-24.04
+    env:
+      KOTLIN_VERSION: '2.3.10'
+      KOTLIN_COMPILER_SHA256: c8d546f9ff433b529fb0ad43feceb39831040cae2ca8d17e7df46364368c9a9e
+      GSON_VERSION: '2.10.1'
+      GSON_SHA256: 4241c14a7727c34feea6507ec801318a3d4a90f070e4525681079fb94ee4c593
     steps:
-      - uses: JetBrains/compose-multiplatform/tools/changelog/check-release-notes-github-action@master
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify workflow supply-chain pins
+        run: python3 .github/scripts/verify-workflow-supply-chain.py .
+
+      - name: Checkout release-note checker
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: JetBrains/compose-multiplatform
+          ref: 9a876be6c1c0f97162b93c152abde14a7493098d
+          sparse-checkout: tools/changelog
+          path: upstream-compose
+          persist-credentials: false
+
+      - name: Cache verified release-note dependencies
+        id: cache-release-note-dependencies
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ${{ runner.tool_cache }}/downloads/kotlin-compiler-2.3.10.zip
+            ${{ runner.tool_cache }}/downloads/gson-2.10.1.jar
+          key: release-note-dependencies-c8d546f9ff433b529fb0ad43feceb39831040cae2ca8d17e7df46364368c9a9e-4241c14a7727c34feea6507ec801318a3d4a90f070e4525681079fb94ee4c593
+
+      - name: Download release-note dependencies
+        if: steps.cache-release-note-dependencies.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          compiler_archive="$RUNNER_TOOL_CACHE/downloads/kotlin-compiler-${KOTLIN_VERSION}.zip"
+          gson_jar="$RUNNER_TOOL_CACHE/downloads/gson-${GSON_VERSION}.jar"
+          mkdir -p "$RUNNER_TOOL_CACHE/downloads"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "$compiler_archive" \
+            "https://github.com/JetBrains/kotlin/releases/download/v2.3.10/kotlin-compiler-2.3.10.zip"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "$gson_jar" \
+            "https://repo1.maven.org/maven2/com/google/code/gson/gson/2.10.1/gson-2.10.1.jar"
+
+      - name: Verify and install release-note dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          compiler_archive="$RUNNER_TOOL_CACHE/downloads/kotlin-compiler-${KOTLIN_VERSION}.zip"
+          gson_jar="$RUNNER_TOOL_CACHE/downloads/gson-${GSON_VERSION}.jar"
+          compiler_extract_dir="$RUNNER_TEMP/kotlin-compiler-${KOTLIN_VERSION}"
+          printf '%s  %s\n%s  %s\n' \
+            "$KOTLIN_COMPILER_SHA256" "$compiler_archive" \
+            "$GSON_SHA256" "$gson_jar" \
+            | sha256sum --check --strict
+          mkdir -p "$compiler_extract_dir" "$RUNNER_TOOL_CACHE/kotlin/$KOTLIN_VERSION"
+          unzip -q "$compiler_archive" -d "$compiler_extract_dir"
+          cp -R "$compiler_extract_dir/kotlinc/." \
+            "$RUNNER_TOOL_CACHE/kotlin/$KOTLIN_VERSION"
+
+      - name: Check Release Notes in the description
+        working-directory: upstream-compose/tools/changelog
+        shell: bash
+        env:
+          PR_DESCRIPTION: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          gson_jar="$RUNNER_TOOL_CACHE/downloads/gson-${GSON_VERSION}.jar"
+          # Disable the script's Maven resolver; executable dependencies must use the
+          # verified local JAR above.
+          test "$(grep -c '^@file:Repository(' changelog.main.kts)" -eq 1
+          test "$(grep -c '^@file:DependsOn(' changelog.main.kts)" -eq 1
+          sed \
+            -e '/^@file:Repository(/d' \
+            -e '/^@file:DependsOn(/d' \
+            changelog.main.kts > changelog.offline.main.kts
+          printf '%s' "$PR_DESCRIPTION" > prDescription.txt
+          "$RUNNER_TOOL_CACHE/kotlin/$KOTLIN_VERSION/bin/kotlin" -classpath "$gson_jar" \
+            changelog.offline.main.kts action=checkPr prDescription.txt token=""

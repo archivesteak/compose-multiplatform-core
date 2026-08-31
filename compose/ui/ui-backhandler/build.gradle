@@ -63,7 +63,7 @@ androidXMultiplatform {
         jbMain {
             dependsOn(commonMain)
             dependencies {
-                // mingwX64 has no published navigationevent-compose artifact; build from source
+                // Publish this project dependency at the fork coordinate across all owned targets.
                 implementation(project(":navigationevent:navigationevent-compose"))
             }
         }

@@ -29,33 +29,40 @@ import kotlinx.cinterop.pointed
 import kotlinx.cinterop.ptr
 import kotlinx.cinterop.reinterpret
 import kotlinx.cinterop.set
+import kotlinx.cinterop.sizeOf
 import kotlinx.cinterop.staticCFunction
+import kotlinx.cinterop.toLong
 import kotlinx.cinterop.value
+import platform.posix.memcpy
+import platform.windows.DATADIR_GET
+import platform.windows.DVASPECT_CONTENT
 import platform.windows.DWORDVar
 import platform.windows.DoDragDrop
+import platform.windows.FORMATETC
 import platform.windows.GlobalAlloc
+import platform.windows.GlobalFree
 import platform.windows.GlobalLock
+import platform.windows.GlobalSize
 import platform.windows.GlobalUnlock
+import platform.windows.HGLOBAL
 import platform.windows.IDataObject
 import platform.windows.IDataObjectVtbl
 import platform.windows.IDropSource
 import platform.windows.IDropSourceVtbl
 import platform.windows.MK_LBUTTON
 import platform.windows.MK_RBUTTON
+import platform.windows.SHCreateStdEnumFmtEtc
 import platform.windows.STGMEDIUM
 import platform.windows.TYMED_HGLOBAL
 import platform.windows.WCHARVar
 
-private const val S_OK = 0
-private const val E_NOTIMPL = -2147467263 // 0x80004001
-private const val E_FAIL = -2147467259 // 0x80004005
-private const val DRAGDROP_S_DROP = 262400 // 0x00040100
-private const val DRAGDROP_S_CANCEL = 262401 // 0x00040101
+internal const val DRAGDROP_S_DROP = 262400 // 0x00040100
+internal const val DRAGDROP_S_CANCEL = 262401 // 0x00040101
 private const val DRAGDROP_S_USEDEFAULTCURSORS = 262402 // 0x00040102
-private const val DV_E_FORMATETC = -2147221404 // 0x80040064
+private const val DATA_S_SAMEFORMATETC = 262448 // 0x00040130
 
-private const val CF_UNICODETEXT = 13u
-private const val GMEM_MOVEABLE = 0x2002u
+internal const val CF_UNICODETEXT = 13u
+private const val GMEM_MOVEABLE = 0x0002u
 
 private const val DROPEFFECT_NONE = 0u
 private const val DROPEFFECT_COPY = 1u
@@ -63,50 +70,83 @@ private const val DROPEFFECT_COPY = 1u
 /**
  * Starts a shell drag carrying [text], blocking until the user drops or cancels.
  *
- * This is the outgoing half of drag and drop: `DoDragDrop` runs its own modal loop, calling back
- * into the [IDropSource] to ask whether to continue and into the [IDataObject] to fetch the
- * payload when a target accepts it. Both objects are built by hand — Kotlin/Native has no COM —
- * as native memory whose first word points at a vtable of [staticCFunction] entries.
- *
- * Returns true if the drop was accepted somewhere.
+ * Each COM object retains its creator reference for the full modal loop. Interface pointers handed
+ * out by `QueryInterface` and by OLE add their own references, so native memory is not reclaimed
+ * until all of those pointers have been released.
  */
 internal fun startTextDrag(text: String): Boolean {
     val source = Win32DropSource()
-    val data = Win32TextDataObject(text)
-    return try {
-        memScoped {
-            val effect = alloc<DWORDVar>()
-            val result = DoDragDrop(data.comObject.ptr, source.comObject.ptr, DROPEFFECT_COPY, effect.ptr)
-            result == DRAGDROP_S_DROP && effect.value != DROPEFFECT_NONE
+    try {
+        val data = Win32TextDataObject.create(text) ?: return false
+        try {
+            return memScoped {
+                val effect = alloc<DWORDVar>()
+                effect.value = DROPEFFECT_NONE
+                val result = DoDragDrop(
+                    data.comObject.ptr,
+                    source.comObject.ptr,
+                    DROPEFFECT_COPY,
+                    effect.ptr,
+                )
+                // The Boolean answers whether this source started the modal transfer, not whether
+                // the user ultimately dropped. A normal Escape cancellation must still stop source
+                // traversal; returning false would immediately start a second eligible source.
+                didStartDragLoop(result)
+            }
+        } finally {
+            data.dispose()
         }
     } finally {
-        data.dispose()
         source.dispose()
     }
 }
 
-/**
- * Tells the shell when the drag ends: releasing the button drops, pressing Escape cancels.
- *
- * It holds no per-drag state, so unlike the drop target it needs no map back to a Kotlin
- * instance — the vtable entries answer purely from their arguments.
- */
-private class Win32DropSource {
+internal fun didStartDragLoop(result: Int): Boolean =
+    result == DRAGDROP_S_DROP || result == DRAGDROP_S_CANCEL
+
+/** Tells OLE when the initiating button is released or Escape cancels the drag. */
+internal class Win32DropSource {
     private val vtable = nativeHeap.alloc<IDropSourceVtbl>()
-    val comObject = nativeHeap.alloc<IDropSource>()
+    internal val comObject = nativeHeap.alloc<IDropSource>()
+    private val references = StaComReferenceCount(::destroyNative)
+    private var ownerReferenceReleased = false
+
+    internal val referenceCount: UInt get() = references.value
 
     init {
-        vtable.QueryInterface = staticCFunction { self, _, ppv ->
-            ppv?.pointed?.value = self
-            S_OK
+        vtable.QueryInterface = staticCFunction { self, iid, output ->
+            if (output == null) {
+                E_POINTER
+            } else {
+                output.pointed.value = null
+                if (iid == null) {
+                    E_POINTER
+                } else {
+                    val source = sources[self.rawAddressOfSource()]
+                    when {
+                        source == null -> E_UNEXPECTED
+                        !iid.matchesOleInterfaceId(IID_DATA1_IUNKNOWN) &&
+                            !iid.matchesOleInterfaceId(IID_DATA1_IDROPSOURCE) -> E_NOINTERFACE
+                        else -> {
+                            output.pointed.value = self
+                            source.references.addRef()
+                            S_OK
+                        }
+                    }
+                }
+            }
         }
-        vtable.AddRef = staticCFunction { _ -> 1u }
-        vtable.Release = staticCFunction { _ -> 1u }
+        vtable.AddRef = staticCFunction { self ->
+            sources[self.rawAddressOfSource()]?.references?.addRef() ?: 0u
+        }
+        vtable.Release = staticCFunction { self ->
+            sources[self.rawAddressOfSource()]?.references?.release() ?: 0u
+        }
 
         vtable.QueryContinueDrag = staticCFunction { _, escapePressed, keyState ->
             when {
                 escapePressed != 0 -> DRAGDROP_S_CANCEL
-                // The gesture ends when every mouse button is up.
+                // The gesture ends when every initiating mouse button is up.
                 keyState.toInt() and (MK_LBUTTON or MK_RBUTTON) == 0 -> DRAGDROP_S_DROP
                 else -> S_OK
             }
@@ -116,119 +156,239 @@ private class Win32DropSource {
         vtable.GiveFeedback = staticCFunction { _, _ -> DRAGDROP_S_USEDEFAULTCURSORS }
 
         comObject.lpVtbl = vtable.ptr
+        sources[comObject.ptr.rawAddressOfSource()] = this
     }
 
     fun dispose() {
+        if (ownerReferenceReleased) return
+        ownerReferenceReleased = true
+        references.release()
+    }
+
+    private fun destroyNative() {
+        sources.remove(comObject.ptr.rawAddressOfSource())
         nativeHeap.free(comObject.rawPtr)
         nativeHeap.free(vtable.rawPtr)
     }
 }
 
-/**
- * A minimal [IDataObject] offering a single `CF_UNICODETEXT` value.
- *
- * Only the methods `DoDragDrop` and a drop target actually use are implemented; the rest return
- * `E_NOTIMPL`, which is what a source-only data object is expected to do.
- */
-private class Win32TextDataObject(text: String) {
+/** A read-only [IDataObject] offering one `CF_UNICODETEXT` value. */
+internal class Win32TextDataObject private constructor(private val payload: HGLOBAL) {
     private val vtable = nativeHeap.alloc<IDataObjectVtbl>()
-    val comObject = nativeHeap.alloc<IDataObject>()
+    internal val comObject = nativeHeap.alloc<IDataObject>()
+    private val references = StaComReferenceCount(::destroyNative)
+    private var ownerReferenceReleased = false
 
-    /** The payload, kept in a moveable global block for the lifetime of the drag. */
-    private val payload = allocateUtf16Global(text)
+    internal val referenceCount: UInt get() = references.value
 
     init {
-        objects[comObject.ptr.rawValue.toLong()] = this
-
-        vtable.QueryInterface = staticCFunction { self, _, ppv ->
-            ppv?.pointed?.value = self
-            S_OK
+        vtable.QueryInterface = staticCFunction { self, iid, output ->
+            if (output == null) {
+                E_POINTER
+            } else {
+                output.pointed.value = null
+                if (iid == null) {
+                    E_POINTER
+                } else {
+                    val data = dataObjects[self.rawAddressOfData()]
+                    when {
+                        data == null -> E_UNEXPECTED
+                        !iid.matchesOleInterfaceId(IID_DATA1_IUNKNOWN) &&
+                            !iid.matchesOleInterfaceId(IID_DATA1_IDATAOBJECT) -> E_NOINTERFACE
+                        else -> {
+                            output.pointed.value = self
+                            data.references.addRef()
+                            S_OK
+                        }
+                    }
+                }
+            }
         }
-        vtable.AddRef = staticCFunction { _ -> 1u }
-        vtable.Release = staticCFunction { _ -> 1u }
+        vtable.AddRef = staticCFunction { self ->
+            dataObjects[self.rawAddressOfData()]?.references?.addRef() ?: 0u
+        }
+        vtable.Release = staticCFunction { self ->
+            dataObjects[self.rawAddressOfData()]?.references?.release() ?: 0u
+        }
 
         vtable.GetData = staticCFunction { self, format, medium ->
-            val owner = objects[self.rawAddressOfData()]
-            val requested = format?.pointed
+            val owner = dataObjects[self.rawAddressOfData()]
             when {
-                owner == null || medium == null || requested == null -> E_FAIL
-                requested.cfFormat.toUInt() != CF_UNICODETEXT -> DV_E_FORMATETC
-                requested.tymed and TYMED_HGLOBAL.toUInt() == 0u -> DV_E_FORMATETC
+                owner == null -> E_UNEXPECTED
+                format == null || medium == null -> E_INVALIDARG
                 else -> {
-                    // The receiver takes ownership of the copy and frees it via ReleaseStgMedium.
-                    val copy = owner.duplicatePayload()
-                    if (copy == null) {
-                        E_FAIL
+                    medium.pointed.tymed = 0u
+                    medium.pointed.hGlobal = null
+                    medium.pointed.pUnkForRelease = null
+                    val validation = validateUnicodeTextFormat(
+                        clipboardFormat = format.pointed.cfFormat.toUInt(),
+                        aspect = format.pointed.dwAspect,
+                        index = format.pointed.lindex,
+                        media = format.pointed.tymed,
+                    )
+                    if (validation != S_OK) {
+                        validation
                     } else {
-                        medium.pointed.tymed = TYMED_HGLOBAL.toUInt()
-                        medium.pointed.hGlobal = copy
-                        medium.pointed.pUnkForRelease = null
-                        S_OK
+                        // The receiver owns this independent block and releases it via
+                        // ReleaseStgMedium because pUnkForRelease is null.
+                        val copy = owner.duplicatePayload()
+                        if (copy == null) {
+                            STG_E_MEDIUMFULL
+                        } else {
+                            medium.pointed.tymed = TYMED_HGLOBAL
+                            medium.pointed.hGlobal = copy
+                            medium.pointed.pUnkForRelease = null
+                            S_OK
+                        }
                     }
                 }
             }
         }
 
-        vtable.QueryGetData = staticCFunction { _, format ->
-            val requested = format?.pointed
-            if (requested != null && requested.cfFormat.toUInt() == CF_UNICODETEXT) S_OK
-            else DV_E_FORMATETC
+        vtable.QueryGetData = staticCFunction { self, format ->
+            if (dataObjects[self.rawAddressOfData()] == null) {
+                E_UNEXPECTED
+            } else if (format == null) {
+                E_INVALIDARG
+            } else {
+                validateUnicodeTextFormat(
+                    clipboardFormat = format.pointed.cfFormat.toUInt(),
+                    aspect = format.pointed.dwAspect,
+                    index = format.pointed.lindex,
+                    media = format.pointed.tymed,
+                )
+            }
         }
 
-        // A drag source never has to satisfy these.
         vtable.GetDataHere = staticCFunction { _, _, _ -> E_NOTIMPL }
-        vtable.GetCanonicalFormatEtc = staticCFunction { _, _, _ -> E_NOTIMPL }
+        vtable.GetCanonicalFormatEtc = staticCFunction { _, input, output ->
+            if (input == null || output == null) {
+                E_INVALIDARG
+            } else {
+                // No alternate target-device representation is needed for plain Unicode text.
+                output.pointed.ptd = null
+                DATA_S_SAMEFORMATETC
+            }
+        }
         vtable.SetData = staticCFunction { _, _, _, _ -> E_NOTIMPL }
-        vtable.EnumFormatEtc = staticCFunction { _, _, _ -> E_NOTIMPL }
-        vtable.DAdvise = staticCFunction { _, _, _, _, _ -> E_NOTIMPL }
-        vtable.DUnadvise = staticCFunction { _, _ -> E_NOTIMPL }
-        vtable.EnumDAdvise = staticCFunction { _, _ -> E_NOTIMPL }
+        vtable.EnumFormatEtc = staticCFunction { self, direction, output ->
+            val owner = dataObjects[self.rawAddressOfData()]
+            when {
+                owner == null -> E_UNEXPECTED
+                output == null -> E_POINTER
+                else -> {
+                    output.pointed.value = null
+                    if (direction != DATADIR_GET) {
+                        E_NOTIMPL
+                    } else {
+                        memScoped {
+                            val format = alloc<FORMATETC>()
+                            format.cfFormat = CF_UNICODETEXT.toUShort()
+                            format.ptd = null
+                            format.dwAspect = DVASPECT_CONTENT
+                            format.lindex = -1
+                            format.tymed = TYMED_HGLOBAL
+                            SHCreateStdEnumFmtEtc(1u, format.ptr, output)
+                        }
+                    }
+                }
+            }
+        }
+        vtable.DAdvise = staticCFunction { _, _, _, _, connection ->
+            connection?.pointed?.value = 0u
+            OLE_E_ADVISENOTSUPPORTED
+        }
+        vtable.DUnadvise = staticCFunction { _, _ -> OLE_E_ADVISENOTSUPPORTED }
+        vtable.EnumDAdvise = staticCFunction { _, output ->
+            output?.pointed?.value = null
+            OLE_E_ADVISENOTSUPPORTED
+        }
 
         comObject.lpVtbl = vtable.ptr
+        dataObjects[comObject.ptr.rawAddressOfData()] = this
     }
 
-    /** A fresh global block with the same text, for a receiver that will free it. */
-    fun duplicatePayload(): platform.windows.HGLOBAL? = payload?.let { source ->
-        val locked = GlobalLock(source) ?: return null
+    /** A byte-for-byte copy; no decoding, truncation, or ownership sharing with the source. */
+    private fun duplicatePayload(): HGLOBAL? {
+        val byteCount = GlobalSize(payload)
+        if (byteCount == 0uL) return null
+        val source = GlobalLock(payload) ?: return null
         try {
-            allocateUtf16Global(locked.reinterpret<WCHARVar>().readUtf16())
+            val copy = GlobalAlloc(GMEM_MOVEABLE, byteCount) ?: return null
+            val destination = GlobalLock(copy)
+            if (destination == null) {
+                GlobalFree(copy)
+                return null
+            }
+            try {
+                memcpy(destination, source, byteCount)
+            } finally {
+                GlobalUnlock(copy)
+            }
+            return copy
         } finally {
-            GlobalUnlock(source)
+            GlobalUnlock(payload)
         }
     }
 
     fun dispose() {
-        objects.remove(comObject.ptr.rawValue.toLong())
-        payload?.let { platform.windows.GlobalFree(it) }
+        if (ownerReferenceReleased) return
+        ownerReferenceReleased = true
+        references.release()
+    }
+
+    private fun destroyNative() {
+        dataObjects.remove(comObject.ptr.rawAddressOfData())
+        GlobalFree(payload)
         nativeHeap.free(comObject.rawPtr)
         nativeHeap.free(vtable.rawPtr)
     }
+
+    companion object {
+        fun create(text: String): Win32TextDataObject? =
+            allocateUtf16Global(text)?.let(::Win32TextDataObject)
+    }
 }
 
+/** Validates every FORMATETC field relevant to this one-format data object. */
+internal fun validateUnicodeTextFormat(
+    clipboardFormat: UInt,
+    aspect: UInt,
+    index: Int,
+    media: UInt,
+): Int = when {
+    clipboardFormat != CF_UNICODETEXT -> DV_E_FORMATETC
+    aspect != DVASPECT_CONTENT -> DV_E_DVASPECT
+    index != -1 -> DV_E_LINDEX
+    media and TYMED_HGLOBAL == 0u -> DV_E_TYMED
+    else -> S_OK
+}
+
+private fun CPointer<IDropSource>?.rawAddressOfSource(): Long = this?.rawValue?.toLong() ?: 0L
 private fun CPointer<IDataObject>?.rawAddressOfData(): Long = this?.rawValue?.toLong() ?: 0L
 
-private val objects = mutableMapOf<Long, Win32TextDataObject>()
+private val sources = mutableMapOf<Long, Win32DropSource>()
+private val dataObjects = mutableMapOf<Long, Win32TextDataObject>()
 
-/** Copies [text] into a moveable global block, NUL terminated, as clipboard formats require. */
-private fun allocateUtf16Global(text: String): platform.windows.HGLOBAL? {
-    val characters = text.length + 1
-    val handle = GlobalAlloc(GMEM_MOVEABLE, (characters * 2).convert()) ?: return null
+internal val liveWin32DropSourceCount: Int get() = sources.size
+internal val liveWin32TextDataObjectCount: Int get() = dataObjects.size
+
+/** Copies [text] into an owned moveable global block, NUL terminated. */
+private fun allocateUtf16Global(text: String): HGLOBAL? {
+    val characters = text.length.toULong() + 1uL
+    val byteCount = characters * sizeOf<WCHARVar>().toULong()
+    val handle = GlobalAlloc(GMEM_MOVEABLE, byteCount) ?: return null
     val locked = GlobalLock(handle)
     if (locked == null) {
-        platform.windows.GlobalFree(handle)
+        GlobalFree(handle)
         return null
     }
-    val chars = locked.reinterpret<WCHARVar>()
-    for (i in text.indices) chars[i] = text[i].code.toUShort()
-    chars[text.length] = 0u
-    GlobalUnlock(handle)
-    return handle
-}
-
-private fun CPointer<WCHARVar>.readUtf16(): String = buildString {
-    var i = 0
-    while (this@readUtf16[i] != 0.toUShort()) {
-        append(this@readUtf16[i].toInt().toChar())
-        i++
+    try {
+        val output = locked.reinterpret<WCHARVar>()
+        for (index in text.indices) output[index] = text[index].code.toUShort()
+        output[text.length] = 0u
+    } finally {
+        GlobalUnlock(handle)
     }
+    return handle
 }

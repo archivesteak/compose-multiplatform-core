@@ -52,8 +52,9 @@ internal actual val DragAndDropEvent.positionInRoot: Offset
 /**
  * Describes a drag started from inside Compose.
  *
- * Outgoing drags are not wired to `DoDragDrop` yet, so this carries the payload without a shell
- * session behind it; incoming drops are fully supported.
+ * Outgoing plain-text drags use OLE `DoDragDrop`. Outgoing file payloads are not supported yet and
+ * the transfer request is rejected when [files] is non-empty, rather than silently starting a
+ * partial drag. Incoming drops support both text and files.
  */
 actual class DragAndDropTransferData @ExperimentalComposeUiApi constructor(
     /** Plain text to hand to the drop target. */
@@ -64,3 +65,7 @@ actual class DragAndDropTransferData @ExperimentalComposeUiApi constructor(
     @property:ExperimentalComposeUiApi
     val files: List<String> = emptyList(),
 )
+
+@OptIn(ExperimentalComposeUiApi::class)
+internal val DragAndDropTransferData.isSupportedOutgoingPayload: Boolean
+    get() = text != null && files.isEmpty()

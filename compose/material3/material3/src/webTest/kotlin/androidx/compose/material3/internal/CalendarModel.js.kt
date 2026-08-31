@@ -26,6 +26,8 @@ actual fun calendarLocale(language: String, country : String): CalendarLocale {
 actual val supportsDateSkeleton: Boolean
     get() = true
 
+actual val expectedKoreanDateInputFormat: String = "yyyy.MM.dd"
+
 // not implemented
 actual fun setTimeZone(id: String) {
 }

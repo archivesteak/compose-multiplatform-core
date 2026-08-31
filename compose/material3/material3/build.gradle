@@ -129,7 +129,7 @@ androidXMultiplatform {
                 implementation(project(":compose:runtime:runtime"))
                 def navigationEventVersion = project.redirectVersions.get('androidx.navigationevent')
                 implementation("androidx.navigationevent:navigationevent-testing:$navigationEventVersion")
-                implementation("androidx.navigationevent:navigationevent-compose:$navigationEventVersion")
+                implementation(project(":navigationevent:navigationevent-compose"))
             }
         }
 

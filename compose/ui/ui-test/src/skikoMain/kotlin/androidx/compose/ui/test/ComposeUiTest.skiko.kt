@@ -282,15 +282,22 @@ open class SkikoComposeUiTest @InternalTestApi constructor(
     }
 
     private inline fun <R> withScene(block: () -> R): R {
-        runOnUiThread(::createScene)
+        acquireTestUiThread()
+        var sceneCreated = false
         try {
+            runOnUiThread(::createScene)
+            sceneCreated = true
             return block()
         } finally {
-            runOnUiThread(::closeScene)
-            // After the scene is closed, run all left foreground TestDispatchEvent.
-            // They might've been added outside the runTest call, using the provided coroutineDispatcher:
-            compositionCoroutineDispatcher.scheduler.advanceUntilIdle()
-            uncaughtExceptionHandler.throwUncaught()
+            try {
+                if (sceneCreated) runOnUiThread(::closeScene)
+                // After the scene is closed, run all left foreground TestDispatchEvent.
+                // They might've been added outside the runTest call, using the provided coroutineDispatcher:
+                compositionCoroutineDispatcher.scheduler.advanceUntilIdle()
+                uncaughtExceptionHandler.throwUncaught()
+            } finally {
+                releaseTestUiThread()
+            }
         }
     }
 

@@ -131,7 +131,14 @@ internal fun Project.configureDependencyVerification() {
                     .map { project.configurations.getByName(it) }
                     .flatMap { configuration ->
                         configuration.allDependencies
-                            .filter { it.group != null && it.version != null }
+                            .filter { dependency ->
+                                val group = dependency.group
+                                dependency.version != null && group != null &&
+                                    (
+                                        JetBrainsPublication.isAndroidXGroup(group) ||
+                                            JetBrainsPublication.isJetBrainsForkGroup(group)
+                                    )
+                            }
                             .map { dependency ->
                                 AndroidXDependency(
                                     dependency.group!!,

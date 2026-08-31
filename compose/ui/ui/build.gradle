@@ -73,6 +73,8 @@ androidXMultiplatform {
 
     sourceSets {
         def composeVersion = project.redirectVersions.get('androidx.compose')
+        def lifecycleVersion = project.redirectVersions.get('androidx.lifecycle')
+        def savedStateVersion = project.redirectVersions.get('androidx.savedstate')
         commonMain.dependencies {
             implementation(libs.kotlinCoroutinesCore)
             api("androidx.annotation:annotation:1.9.1")
@@ -88,8 +90,8 @@ androidXMultiplatform {
             api(project(":compose:ui:ui-unit"))
             api(project(":compose:ui:ui-util"))
 
-            api("org.jetbrains.androidx.lifecycle:lifecycle-runtime-compose:2.9.6")
-            api("androidx.savedstate:savedstate-compose:1.4.0")
+            api("androidx.lifecycle:lifecycle-runtime-compose:$lifecycleVersion")
+            api("androidx.savedstate:savedstate-compose:$savedStateVersion")
         }
 
         commonTest.dependencies {
@@ -196,7 +198,6 @@ androidXMultiplatform {
             implementation(project(":compose:test-utils"))
         }
 
-        def lifecycleVersion = project.redirectVersions.get('androidx.lifecycle')
         // TODO: Align naming: nonAndroidMain
         skikoMain {
             dependsOn(commonMain)
@@ -206,7 +207,8 @@ androidXMultiplatform {
                 api(libs.skiko)
                 implementation(libs.atomicFu)
 
-                // mingwX64 has no published navigationevent-compose artifact; build from source
+                // Use the fork project so publication redirects to the fork coordinate. The
+                // NAVIGATION_EVENT producer publishes that dependency for every owned target.
                 implementation(project(":navigationevent:navigationevent-compose"))
                 implementation("androidx.lifecycle:lifecycle-viewmodel-compose:$lifecycleVersion")
                 implementation("androidx.lifecycle:lifecycle-viewmodel-savedstate:$lifecycleVersion")
@@ -252,8 +254,8 @@ androidXMultiplatform {
                 implementation("org.jetbrains.compose.annotation-internal:annotation:1.10.0")
                 implementation("org.jetbrains.compose.collection-internal:collection:1.10.0")
                 implementation(project(":compose:ui:ui-backhandler"))
-                implementation("org.jetbrains.androidx.lifecycle:lifecycle-viewmodel:2.9.6")
-                implementation("org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-savedstate:2.9.6")
+                implementation("androidx.lifecycle:lifecycle-viewmodel:$lifecycleVersion")
+                implementation("androidx.lifecycle:lifecycle-viewmodel-savedstate:$lifecycleVersion")
             }
         }
 

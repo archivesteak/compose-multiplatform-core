@@ -52,3 +52,7 @@ internal actual fun isOnUiThread(): Boolean {
 internal actual fun sleep(timeMillis: Long) {
     Thread.sleep(timeMillis)
 }
+
+internal actual fun acquireTestUiThread() = Unit
+
+internal actual fun releaseTestUiThread() = Unit

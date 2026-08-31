@@ -63,3 +63,7 @@ internal actual fun sleep(timeMillis: Long) {
 
     nanosleep(time, null)
 }
+
+internal actual fun acquireTestUiThread() = Unit
+
+internal actual fun releaseTestUiThread() = Unit

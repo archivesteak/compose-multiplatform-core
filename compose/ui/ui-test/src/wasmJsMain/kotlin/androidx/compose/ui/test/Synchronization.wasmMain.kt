@@ -40,3 +40,7 @@ internal actual fun isOnUiThread(): Boolean = false
 internal actual fun sleep(timeMillis: Long) {
     throw UnsupportedOperationException("sleep is not supported in JS target")
 }
+
+internal actual fun acquireTestUiThread() = Unit
+
+internal actual fun releaseTestUiThread() = Unit

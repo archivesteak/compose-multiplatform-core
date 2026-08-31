@@ -72,8 +72,6 @@ actual class GraphicsLayer internal constructor(
     private var outsetTop: Int = 0
     private var outsetRight: Int = 0
     private var outsetBottom: Int = 0
-    private var cachedLayerPaint: SkPaint? = null
-
     private var parentLayerUsages = 0
     private val childDependenciesTracker = ChildLayerDependenciesTracker()
 
@@ -108,6 +106,7 @@ actual class GraphicsLayer internal constructor(
                     value.width.toFloat(),
                     value.height.toFloat()
                 )
+                updateLayerBounds()
                 if (roundRectOutlineSize.isUnspecified) {
                     outlineDirty = true
                     configureOutlineAndClip()
@@ -127,7 +126,6 @@ actual class GraphicsLayer internal constructor(
         set(value) {
             if (field != value) {
                 field = value
-                renderNode?.alpha = value
                 updateLayerProperties()
             }
         }
@@ -324,11 +322,6 @@ actual class GraphicsLayer internal constructor(
     ) {
         this.size = size
         recordWithTracking { canvas ->
-            canvas.alphaMultiplier = if (compositingStrategy == CompositingStrategy.ModulateAlpha) {
-                this@GraphicsLayer.alpha
-            } else {
-                1.0f
-            }
             pictureDrawScope.draw(
                 density = density,
                 layoutDirection = layoutDirection,
@@ -363,21 +356,7 @@ actual class GraphicsLayer internal constructor(
         if (isReleased) return
         configureOutlineAndClip()
         parentLayer?.addSubLayer(this)
-        val paint = cachedLayerPaint
-        if (hasOutsets() && paint != null) {
-            val skCanvas = canvas.skiaCanvas
-            skCanvas.saveLayer(
-                left = topLeft.x - outsetLeft.toFloat(),
-                top = topLeft.y - outsetTop.toFloat(),
-                right = topLeft.x + size.width + outsetRight.toFloat(),
-                bottom = topLeft.y + size.height + outsetBottom.toFloat(),
-                paint = paint,
-            )
-            renderNode?.drawInto(skCanvas)
-            skCanvas.restore()
-        } else {
-            renderNode?.drawInto(canvas.skiaCanvas)
-        }
+        renderNode?.drawInto(canvas.skiaCanvas)
     }
 
     private fun onAddedToParentLayer() {
@@ -475,10 +454,25 @@ actual class GraphicsLayer internal constructor(
         } else {
             null
         }
-        cachedLayerPaint = paint
-        // When outsets are present, we manage the offscreen layer manually in draw() using an
-        // expanded saveLayer bounds, so the renderNode must not create its own inner layer.
-        renderNode?.layerPaint = if (hasOutsets()) null else paint
+        renderNode?.let { node ->
+            // RenderNode applies layerPaint to offscreen content and alpha separately to shadows.
+            // With no layerPaint, alpha is modulated into each command at replay time.
+            node.layerPaint = paint
+            node.alpha = alpha
+        }
+    }
+
+    private fun updateLayerBounds() {
+        renderNode?.layerBounds = if (hasOutsets()) {
+            SkRect.makeLTRB(
+                -outsetLeft.toFloat(),
+                -outsetTop.toFloat(),
+                size.width + outsetRight.toFloat(),
+                size.height + outsetBottom.toFloat(),
+            )
+        } else {
+            null
+        }
     }
 
     private fun hasOutsets() = outsetLeft > 0 || outsetTop > 0 || outsetRight > 0 || outsetBottom > 0
@@ -507,7 +501,7 @@ actual class GraphicsLayer internal constructor(
             outsetTop = top
             outsetRight = right
             outsetBottom = bottom
-            updateLayerProperties()
+            updateLayerBounds()
         }
     }
 }

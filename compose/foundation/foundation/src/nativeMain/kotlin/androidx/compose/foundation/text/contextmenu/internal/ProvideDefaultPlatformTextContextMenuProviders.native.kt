@@ -16,6 +16,7 @@
 
 package androidx.compose.foundation.text.contextmenu.internal
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 
@@ -24,5 +25,7 @@ internal actual fun ProvideDefaultPlatformTextContextMenuProviders(
     modifier: Modifier,
     content: @Composable () -> Unit
 ) {
-    // TODO: https://youtrack.jetbrains.com/issue/CMP-7819
+    // No native dropdown provider exists yet (CMP-7819), but a provider boundary must never swallow
+    // the text field/selection content if the experimental flag is enabled by an application.
+    Box(modifier, propagateMinConstraints = true) { content() }
 }

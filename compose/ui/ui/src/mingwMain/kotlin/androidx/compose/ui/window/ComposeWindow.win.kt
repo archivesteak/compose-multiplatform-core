@@ -37,6 +37,8 @@ import androidx.compose.ui.platform.FrameRecomposer
 import androidx.compose.ui.platform.PlatformContext
 import androidx.compose.ui.platform.Win32TextInputService
 import androidx.compose.ui.platform.WindowInfoImpl
+import androidx.compose.ui.platform.makeSynchronizedObject
+import androidx.compose.ui.platform.synchronized
 import androidx.compose.ui.scene.CanvasLayersComposeScene
 import androidx.compose.ui.scene.SingleComposeSceneRenderingScope
 import androidx.compose.ui.unit.Density
@@ -47,6 +49,7 @@ import androidx.compose.ui.unit.toDpSize
 import androidx.compose.ui.unit.toSize
 import androidx.compose.ui.draganddrop.DragAndDropEvent
 import androidx.compose.ui.draganddrop.DragAndDropTransferData
+import androidx.compose.ui.draganddrop.isSupportedOutgoingPayload
 import androidx.compose.ui.platform.PlatformDragAndDropManager
 import androidx.compose.ui.platform.PlatformDragAndDropSource
 import androidx.compose.ui.platform.Win32ScreenReader
@@ -54,9 +57,11 @@ import androidx.compose.ui.viewinterop.LocalInteropContainer
 import androidx.compose.ui.viewinterop.TrackInteropPlacementContainer
 import androidx.compose.ui.viewinterop.Win32InteropContainer
 import androidx.compose.ui.win32.Win32DropTarget
+import androidx.compose.ui.win32.S_FALSE
+import androidx.compose.ui.win32.S_OK
 import androidx.compose.ui.win32.startTextDrag
 import androidx.compose.ui.win32.Win32Event
-import androidx.compose.ui.win32.markProcessDpiAware
+import androidx.compose.ui.win32.ensureProcessDpiAwareness
 import androidx.compose.ui.win32.systemScale
 import androidx.compose.ui.win32.windowScale
 import androidx.compose.ui.win32.win32KeyboardModifiers
@@ -79,6 +84,7 @@ import kotlinx.cinterop.toCPointer
 import kotlinx.cinterop.toLong
 import kotlinx.cinterop.wcstr
 import org.jetbrains.skia.Canvas
+import org.jetbrains.skiko.GraphicsApi
 import org.jetbrains.skiko.SkiaLayer
 import platform.posix.fflush
 import org.jetbrains.skiko.SkikoRenderDelegate
@@ -91,16 +97,14 @@ import platform.windows.CreateWindowExW
 import platform.windows.DefWindowProcW
 import platform.windows.DestroyWindow
 import platform.windows.DispatchMessageW
-import platform.windows.GetDC
-import platform.windows.GetDeviceCaps
 import platform.windows.GetLastError
 import platform.windows.GetMessageW
 import platform.windows.GetModuleHandleW
+import platform.windows.GetCurrentThreadId
 import platform.windows.GetWindowLongPtrW
 import platform.windows.HCURSOR
 import platform.windows.HTCLIENT
 import platform.windows.HWND
-import platform.windows.LOGPIXELSY
 import platform.windows.LPARAM
 import platform.windows.LRESULT
 import platform.windows.MK_LBUTTON
@@ -109,13 +113,11 @@ import platform.windows.MK_RBUTTON
 import platform.windows.MK_XBUTTON1
 import platform.windows.MK_XBUTTON2
 import platform.windows.MSG
-import platform.windows.OleInitialize
 import platform.windows.POINT
 import platform.windows.PostQuitMessage
 import platform.windows.RECT
 import platform.windows.RegisterClassExW
 import platform.windows.ReleaseCapture
-import platform.windows.ReleaseDC
 import platform.windows.SIZE_MAXIMIZED
 import platform.windows.SIZE_MINIMIZED
 import platform.windows.SIZE_RESTORED
@@ -125,7 +127,7 @@ import platform.windows.SW_SHOWNORMAL
 import platform.windows.ScreenToClient
 import platform.windows.SetCapture
 import platform.windows.SetCursor
-import platform.windows.SetProcessDPIAware
+import platform.windows.SetLastError
 import platform.windows.SetWindowLongPtrW
 import platform.windows.SetWindowPos
 import platform.windows.ShowWindow
@@ -178,6 +180,9 @@ import platform.windows.XBUTTON2
 interface WindowScope {
     /** `HWND` of the window that was created by [androidx.compose.ui.window.Window]. */
     val window: HWND
+
+    /** Graphics backend the window's Skia layer actually created, after any safe fallback. */
+    val renderApi: GraphicsApi get() = GraphicsApi.UNKNOWN
 }
 
 /**
@@ -196,14 +201,21 @@ interface WindowScope {
  * ```
  */
 fun application(content: () -> Unit) {
-    check(!ComposeWindows.isApplicationScope) { "application { } is already running" }
-    ComposeWindows.isApplicationScope = true
-    try {
-        content()
-        pumpMessages()
-    } finally {
-        ComposeWindows.isApplicationScope = false
-        ComposeWindows.destroyAll()
+    withBoundMainDispatcher {
+        ComposeWindows.enterApplicationScope()
+        try {
+            content()
+            pumpMessages()
+        } finally {
+            // Teardown stays inside the dispatcher binding. Failure before the message loop and an
+            // external WM_QUIT can both leave scene cleanup work queued; the outer scope drains it
+            // before atomically unbinding.
+            try {
+                ComposeWindows.destroyAll()
+            } finally {
+                ComposeWindows.leaveApplicationScope()
+            }
+        }
     }
 }
 
@@ -222,68 +234,187 @@ fun Window(
     size: DpSize = DpSize(800.dp, 600.dp),
     content: @Composable WindowScope.() -> Unit,
 ) {
-    val window = ComposeWindow(title = title, size = size, content = content)
-    if (ComposeWindows.isApplicationScope) return
+    if (ComposeWindows.isApplicationScopeOnCurrentThread()) {
+        ComposeWindow(title = title, size = size, content = content)
+        return
+    }
+    withBoundMainDispatcher {
+        val window = ComposeWindow(title = title, size = size, content = content)
+        try {
+            pumpMessages()
+        } finally {
+            // A no-op on the normal path: closing the window already ran the teardown. This covers
+            // leaving the loop through an exception or an externally posted WM_QUIT.
+            window.destroy()
+        }
+    }
+}
+
+/** Keeps construction, message pumping, and every teardown callback on one dispatcher lifetime. */
+private inline fun <T> withBoundMainDispatcher(block: () -> T): T {
+    Win32MainDispatcher.bindToCurrentThread()
+    var primaryFailure: Throwable? = null
     try {
-        pumpMessages()
+        // Work can have been queued while no application was active. Drain it before constructing
+        // another scene, then own every subsequent wake-up until the scope is fully torn down.
+        Win32MainDispatcher.drain()
+        return block()
+    } catch (throwable: Throwable) {
+        primaryFailure = throwable
+        throw throwable
     } finally {
-        // A no-op on the normal path: closing the window already ran the teardown. This covers
-        // leaving the loop through an exception thrown out of the content.
-        window.destroy()
+        try {
+            Win32MainDispatcher.drainAndUnbindFromCurrentThread()
+        } catch (cleanupFailure: Throwable) {
+            val primary = primaryFailure
+            if (primary == null) throw cleanupFailure
+            primary.addSuppressed(cleanupFailure)
+        }
     }
 }
 
 /**
  * Every window this process has open, so the message loop knows when the last one has gone.
  *
- * Kotlin/Native runs Compose on the single thread that pumps messages, so this needs no locking.
+ * The collections are used only by the bound UI thread, while the application owner is read by
+ * callers before they bind. Synchronizing all state makes that cross-thread rejection deterministic.
  */
 private object ComposeWindows {
+    private val lock = makeSynchronizedObject(this)
     private val open = mutableSetOf<ComposeWindow>()
 
-    /** True inside [application], where [Window] must return instead of pumping messages. */
-    var isApplicationScope = false
+    /** Thread inside [application], where [Window] must return instead of pumping messages. */
+    private var applicationThreadId = 0u
 
     /** True while [pumpMessages] is running, so closing the last window can end it. */
-    var isPumping = false
+    private var isPumping = false
+
+    fun enterApplicationScope() {
+        Win32MainDispatcher.checkCurrentThread()
+        val currentThreadId = GetCurrentThreadId()
+        synchronized(lock) {
+            check(applicationThreadId == 0u) { "application { } is already running" }
+            applicationThreadId = currentThreadId
+        }
+    }
+
+    fun leaveApplicationScope() {
+        Win32MainDispatcher.checkCurrentThread()
+        val currentThreadId = GetCurrentThreadId()
+        synchronized(lock) {
+            check(applicationThreadId == currentThreadId) {
+                "application { } must leave on its owning message-loop thread"
+            }
+            applicationThreadId = 0u
+        }
+    }
+
+    fun isApplicationScopeOnCurrentThread(): Boolean {
+        val currentThreadId = GetCurrentThreadId()
+        val ownerThreadId = synchronized(lock) { applicationThreadId }
+        return when (ownerThreadId) {
+            0u -> false
+            currentThreadId -> {
+                Win32MainDispatcher.checkCurrentThread()
+                true
+            }
+            else -> error(
+                "Window must be created on the thread that owns the active application { }"
+            )
+        }
+    }
+
+    fun beginPumping() {
+        Win32MainDispatcher.checkCurrentThread()
+        synchronized(lock) {
+            check(!isPumping) { "The Win32 message loop is already running" }
+            isPumping = true
+        }
+    }
+
+    fun endPumping() {
+        Win32MainDispatcher.checkCurrentThread()
+        synchronized(lock) {
+            check(isPumping) { "The Win32 message loop is not running" }
+            isPumping = false
+        }
+    }
 
     fun register(window: ComposeWindow) {
-        open.add(window)
+        Win32MainDispatcher.checkCurrentThread()
+        synchronized(lock) { open.add(window) }
     }
 
     fun unregister(window: ComposeWindow) {
-        if (open.remove(window) && open.isEmpty() && isPumping) {
+        Win32MainDispatcher.checkCurrentThread()
+        val shouldQuit = synchronized(lock) {
+            open.remove(window) && open.isEmpty() && isPumping
+        }
+        if (shouldQuit) {
             // The last window has gone: let the message loop finish.
             PostQuitMessage(0)
         }
     }
 
+    fun hasOpenWindows(): Boolean {
+        Win32MainDispatcher.checkCurrentThread()
+        return synchronized(lock) { open.isNotEmpty() }
+    }
+
     fun destroyAll() {
+        Win32MainDispatcher.checkCurrentThread()
         // Copied first: destroying a window unregisters it.
-        open.toList().forEach(ComposeWindow::destroy)
+        val windows = synchronized(lock) { open.toList() }
+        windows.forEach { window ->
+            try {
+                window.destroy()
+            } catch (throwable: Throwable) {
+                reportFailure("Unable to destroy a Compose window:", throwable)
+            }
+        }
+    }
+}
+
+/** Drives the three-valued `GetMessageW` contract and is deterministic under native tests. */
+internal fun runWin32MessageLoop(
+    getMessage: () -> Int,
+    dispatchMessage: () -> Unit,
+    getMessageFailed: () -> Nothing,
+) {
+    while (true) {
+        when (getMessage()) {
+            -1 -> getMessageFailed()
+            0 -> return
+            else -> dispatchMessage()
+        }
     }
 }
 
 /** Pumps messages until the last window closes. */
 private fun pumpMessages() = memScoped {
-    ComposeWindows.isPumping = true
-    // Claim this thread for Compose's dispatcher, then run whatever was queued while the windows
-    // were being constructed.
-    Win32MainDispatcher.bindToCurrentThread()
-    Win32MainDispatcher.drain()
+    // `application { }` is valid with no windows, as is content that creates and closes a
+    // window synchronously. Neither case should block forever waiting for a message.
+    if (!ComposeWindows.hasOpenWindows()) return@memScoped
+    ComposeWindows.beginPumping()
+    try {
 
-    val msg = alloc<MSG>()
-    // `GetMessageW` returns 0 on WM_QUIT and -1 on error; both end the loop.
-    while (GetMessageW(msg.ptr, null, 0u, 0u) > 0) {
-        // Thread messages have no window, so DispatchMessage would silently drop them.
-        if (msg.hwnd == null && msg.message.toInt() == WM_COMPOSE_DISPATCH) {
-            Win32MainDispatcher.drain()
-        } else {
-            TranslateMessage(msg.ptr)
-            DispatchMessageW(msg.ptr)
-        }
+        val msg = alloc<MSG>()
+        runWin32MessageLoop(
+            getMessage = { GetMessageW(msg.ptr, null, 0u, 0u) },
+            dispatchMessage = {
+                // Thread messages have no window, so DispatchMessage would silently drop them.
+                if (msg.hwnd == null && msg.message.toInt() == WM_COMPOSE_DISPATCH) {
+                    Win32MainDispatcher.drain()
+                } else {
+                    TranslateMessage(msg.ptr)
+                    DispatchMessageW(msg.ptr)
+                }
+            },
+            getMessageFailed = { error("GetMessageW failed: ${GetLastError()}") },
+        )
+    } finally {
+        ComposeWindows.endPumping()
     }
-    ComposeWindows.isPumping = false
 }
 
 private class ComposeWindow(
@@ -292,6 +423,9 @@ private class ComposeWindow(
     content: @Composable WindowScope.() -> Unit,
 ) : WindowScope {
     private var isDisposed = false
+    private var isConstructionComplete = false
+    private var isNativeCleanupComplete = false
+    private var isSelfReferenceDisposed = false
 
     private val textInputService = Win32TextInputService()
     private val _windowInfo = WindowInfoImpl().apply { isWindowFocused = true }
@@ -328,20 +462,21 @@ private class ComposeWindow(
             source: PlatformDragAndDropSource,
             offset: Offset,
         ) {
-            var payload: DragAndDropTransferData? = null
+            var transferSucceeded = false
             val scope = object : PlatformDragAndDropSource.StartTransferScope {
                 override fun startDragAndDropTransfer(
                     transferData: DragAndDropTransferData,
                     decorationSize: Size,
                     drawDragDecoration: DrawScope.() -> Unit,
                 ): Boolean {
+                    if (oleApartment?.supportsOle != true ||
+                        !transferData.isSupportedOutgoingPayload
+                    ) return false
                     // The shell draws its own drag image, so the decoration is not used.
-                    payload = transferData
-                    return true
+                    return startTextDrag(transferData.text!!).also { transferSucceeded = it }
                 }
             }
-            with(source) { scope.startDragAndDropTransfer(offset) { payload != null } }
-            payload?.text?.let(::startTextDrag)
+            with(source) { scope.startDragAndDropTransfer(offset) { transferSucceeded } }
         }
     }
 
@@ -350,6 +485,9 @@ private class ComposeWindow(
 
     /** Shell drop target, registered once the window exists. */
     private var dropTarget: Win32DropTarget? = null
+
+    /** This window's balanced contribution to the current thread's OLE initialization count. */
+    private var oleApartment: OleApartment? = null
 
     /** Last event seen from the shell, so leave/end can be reported with a position. */
     private var lastDragEvent: DragAndDropEvent? = null
@@ -390,6 +528,27 @@ private class ComposeWindow(
         invalidateDraw = sceneRenderingScope::onSceneInvalidation,
     )
 
+    /** Delivers every terminal drag callback once, preserving both failures if either throws. */
+    private fun finishDrag(event: DragAndDropEvent, sendExited: Boolean) {
+        var failure: Throwable? = null
+        if (sendExited) {
+            try {
+                scene.rootDragAndDropNode.onExited(event)
+            } catch (throwable: Throwable) {
+                failure = throwable
+            }
+        }
+        try {
+            scene.rootDragAndDropNode.onEnded(event)
+        } catch (throwable: Throwable) {
+            val first = failure
+            if (first == null) failure = throwable else first.addSuppressed(throwable)
+        } finally {
+            lastDragEvent = null
+        }
+        failure?.let { throw it }
+    }
+
     private val renderDelegate = object : SkikoRenderDelegate {
         override fun onRender(canvas: Canvas, width: Int, height: Int, nanoTime: Long) {
             // Rendering runs inside skiko's window procedure, which is a C callback: an exception
@@ -415,61 +574,138 @@ private class ComposeWindow(
      */
     private val selfRef = StableRef.create(this)
 
-    override val window: HWND = createWindow(title, size, selfRef)
+    override val window: HWND = try {
+        createWindow(title, size, selfRef)
+    } catch (throwable: Throwable) {
+        releaseSelfReferenceWithoutWindow()
+        try {
+            scene.close()
+        } catch (closeFailure: Throwable) {
+            throwable.addSuppressed(closeFailure)
+        }
+        try {
+            frameRecomposer.close()
+        } catch (closeFailure: Throwable) {
+            throwable.addSuppressed(closeFailure)
+        }
+        throw throwable
+    }
+
+    override val renderApi: GraphicsApi
+        get() = skiaLayer.renderApi
 
     init {
-        skiaLayer.renderDelegate = renderDelegate
-        skiaLayer.attachTo(window) // Subclasses the window procedure, so create the window first.
+        // CreateWindowExW synchronously sends construction messages before assigning [window].
+        // Only messages received after this point may enter the fully initialized window logic.
+        isConstructionComplete = true
+        try {
+            // A live window is at least CREATED before any composition or lifecycle observer can
+            // run. Besides matching the lifecycle contract, this makes a synchronous WM_CLOSE from
+            // initial composition a valid CREATED -> DESTROYED transition.
+            archComponentsOwner.setLifecycleState(Lifecycle.State.CREATED)
+            archComponentsOwner.enableSavedStateHandles()
 
-        // IMM32 calls need the window that owns the input context.
-        textInputService.window = window
+            // Register before entering Skia, lifecycle, or composition code. Any of those can invoke
+            // user code synchronously, and that code is allowed to send WM_CLOSE/DestroyWindow.
+            // WM_DESTROY must therefore be able to unregister this window before construction
+            // resumes; registering after setContent would resurrect an already-destroyed HWND.
+            ComposeWindows.register(this)
 
-        ComposeWindows.register(this)
+            skiaLayer.renderDelegate = renderDelegate
+            skiaLayer.attachTo(window) // Subclasses the window procedure, so create the window first.
 
-        // Accept files and text dropped from the shell.
-        OleInitialize(null)
-        dropTarget = Win32DropTarget(
-            hwnd = window,
-            onDragEnter = { event ->
-                lastDragEvent = event
-                scene.rootDragAndDropNode.acceptDragAndDropTransfer(event).also { accepted ->
-                    if (accepted) {
-                        scene.rootDragAndDropNode.onStarted(event)
-                        scene.rootDragAndDropNode.onEntered(event)
+            // IMM32 calls need the window that owns the input context.
+            textInputService.window = window
+
+            // S_OK and S_FALSE both require a later OleUninitialize. RPC_E_CHANGED_MODE does not
+            // and cannot support OLE drag-and-drop on this apartment.
+            oleApartment = OleApartment.initialize()
+            val ole = oleApartment!!
+            if (ole.supportsOle) {
+                val registration = Win32DropTarget.register(
+                    hwnd = window,
+                    onDragEnter = { event ->
+                        lastDragEvent = null
+                        val accepted = scene.rootDragAndDropNode.acceptDragAndDropTransfer(event)
+                        if (accepted) {
+                            lastDragEvent = event
+                            try {
+                                scene.rootDragAndDropNode.onStarted(event)
+                                scene.rootDragAndDropNode.onEntered(event)
+                            } catch (throwable: Throwable) {
+                                try {
+                                    finishDrag(event, sendExited = false)
+                                } catch (finishFailure: Throwable) {
+                                    throwable.addSuppressed(finishFailure)
+                                }
+                                throw throwable
+                            }
+                        }
+                        accepted
+                    },
+                    onDragOver = { event ->
+                        lastDragEvent = event
+                        scene.rootDragAndDropNode.onMoved(event)
+                    },
+                    onDragLeave = onDragLeave@{
+                        val event = lastDragEvent ?: return@onDragLeave
+                        finishDrag(event, sendExited = true)
+                    },
+                    onDrop = { event ->
+                        lastDragEvent = event
+                        var accepted = false
+                        var failure: Throwable? = null
+                        try {
+                            accepted = scene.rootDragAndDropNode.onDrop(event)
+                        } catch (throwable: Throwable) {
+                            failure = throwable
+                        }
+                        try {
+                            finishDrag(event, sendExited = false)
+                        } catch (finishFailure: Throwable) {
+                            val first = failure
+                            if (first == null) failure = finishFailure else first.addSuppressed(finishFailure)
+                        }
+                        failure?.let { throw it }
+                        accepted
+                    },
+                )
+                checkNotNull(registration.target) {
+                    "RegisterDragDrop failed: HRESULT 0x${registration.hresult.toUInt().toString(16)}"
+                }
+                dropTarget = registration.target
+            } else {
+                reportOleUnavailable(ole)
+            }
+
+            scene.density = Density(windowScale(window))
+            interopContainer = Win32InteropContainer(window).also { it.startObserving() }
+            if (!isDisposed) {
+                scene.setContent {
+                    CompositionLocalProvider(LocalInteropContainer provides interopContainer!!) {
+                        // Tracks where interop children sit in the draw order, so their z-order can follow.
+                        interopContainer!!.TrackInteropPlacementContainer {
+                            content()
+                        }
                     }
                 }
-            },
-            onDragOver = { event ->
-                lastDragEvent = event
-                scene.rootDragAndDropNode.onMoved(event)
-            },
-            onDragLeave = {
-                scene.rootDragAndDropNode.onExited(lastDragEvent ?: return@Win32DropTarget)
-                scene.rootDragAndDropNode.onEnded(lastDragEvent ?: return@Win32DropTarget)
-            },
-            onDrop = { event ->
-                scene.rootDragAndDropNode.onDrop(event).also {
-                    scene.rootDragAndDropNode.onEnded(event)
-                }
-            },
-        )
-
-        scene.density = Density(windowScale(window))
-        interopContainer = Win32InteropContainer(window).also { it.startObserving() }
-        scene.setContent {
-            CompositionLocalProvider(LocalInteropContainer provides interopContainer!!) {
-                // Tracks where interop children sit in the draw order, so their z-order can follow.
-                interopContainer!!.TrackInteropPlacementContainer {
-                    content()
-                }
             }
+
+            // Initial composition and lifecycle observers run synchronously and may have destroyed
+            // the HWND. Never initialize, show, or update an object after WM_DESTROY disposed it.
+            if (!isDisposed) {
+                syncLifecycleState()
+            }
+            if (!isDisposed) ShowWindow(window, SW_SHOWNORMAL)
+            if (!isDisposed) UpdateWindow(window)
+        } catch (throwable: Throwable) {
+            try {
+                destroy()
+            } catch (destroyFailure: Throwable) {
+                throwable.addSuppressed(destroyFailure)
+            }
+            throw throwable
         }
-
-        archComponentsOwner.enableSavedStateHandles()
-        syncLifecycleState()
-
-        ShowWindow(window, SW_SHOWNORMAL)
-        UpdateWindow(window)
     }
 
     /**
@@ -478,7 +714,7 @@ private class ComposeWindow(
      */
     fun destroy() {
         if (!isDisposed) {
-            DestroyWindow(window)
+            check(DestroyWindow(window) != 0) { "DestroyWindow failed: ${GetLastError()}" }
         }
     }
 
@@ -507,10 +743,18 @@ private class ComposeWindow(
     /**
      * Returns the message result, or null to let `DefWindowProcW` handle the message.
      */
-    fun handleMessage(message: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT? {
+    fun handleMessage(hwnd: HWND, message: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT? {
+        if (!isConstructionComplete) {
+            if (message.toInt() == WM_NCDESTROY) releaseSelfReference(hwnd)
+            return null
+        }
         if (message.toInt() == WM_NCDESTROY) {
-            // The last message this window receives: the safe point to unsubclass and release.
-            dispose()
+            // WM_DESTROY runs before Windows destroys child HWNDs; WM_NCDESTROY is the last
+            // message, after the children are gone. Managed composition teardown normally ran in
+            // WM_DESTROY so every interop onRelease callback saw its live child. Keep only the
+            // Skia subclass/back-pointer cleanup here.
+            disposeManagedResources()
+            disposeNativeWindow(hwnd)
             return null
         }
         if (isDisposed) return null
@@ -625,10 +869,14 @@ private class ComposeWindow(
                 0
             }
             WM_CLOSE -> {
-                DestroyWindow(window)
+                destroy()
                 0
             }
             WM_DESTROY -> {
+                // DestroyWindow sends WM_DESTROY before destroying child HWNDs. Closing the scene
+                // here synchronously releases interop holders while their child handles are still
+                // valid; waiting for WM_NCDESTROY would violate Win32's lifetime ordering.
+                disposeManagedResources()
                 // Not PostQuitMessage: with several windows open the loop must outlive this one.
                 // ComposeWindows ends it when the last window is unregistered.
                 0
@@ -760,22 +1008,88 @@ private class ComposeWindow(
         Offset(x = point.x.toFloat(), y = point.y.toFloat())
     }
 
-    private fun dispose() {
+    private fun releaseOleDragDrop() {
+        val target = dropTarget
+        if (target != null) {
+            val result = target.dispose()
+            if (result != S_OK && result != S_FALSE) {
+                reportFailure(
+                    "RevokeDragDrop failed:",
+                    IllegalStateException("HRESULT 0x${result.toUInt().toString(16)}"),
+                )
+                // A failed RevokeDragDrop did not release OLE's COM reference. Preserve the target
+                // and apartment so WM_NCDESTROY can retry while the HWND is still in its final
+                // message, instead of freeing a vtable that OLE may still call.
+                return
+            }
+            dropTarget = null
+        }
+
+        val apartment = oleApartment
+        oleApartment = null
+        if (apartment != null) {
+            try {
+                apartment.close()
+            } catch (throwable: Throwable) {
+                reportFailure("Unable to close the window's OLE apartment:", throwable)
+            }
+        }
+    }
+
+    /** Releases everything whose teardown may touch this window or any native child window. */
+    private fun disposeManagedResources() {
         if (isDisposed) return
         isDisposed = true
 
-        interopContainer?.stopObserving()
+        // Revoke while the HWND is still valid. RevokeDragDrop returns OLE's reference before
+        // OleUninitialize returns this window's apartment initialization count.
+        releaseOleDragDrop()
+
+        val interop = interopContainer
         interopContainer = null
-        dropTarget?.dispose()
-        dropTarget = null
-        ComposeWindows.unregister(this)
-        archComponentsOwner.lifecycle.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
-        archComponentsOwner.viewModelStore.clear()
-        skiaLayer.detach()
-        scene.close()
-        frameRecomposer.close()
+        disposeStep("stop observing native child windows") { interop?.stopObserving() }
+        textInputService.window = null
+        disposeStep("destroy the lifecycle") {
+            archComponentsOwner.lifecycle.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
+        }
+        disposeStep("clear the ViewModel store") { archComponentsOwner.viewModelStore.clear() }
+        // Closing the scene releases every Win32InteropViewHolder synchronously. This must precede
+        // DefWindowProcW's child-destruction phase that follows WM_DESTROY.
+        disposeStep("close the Compose scene") { scene.close() }
+        disposeStep("close the frame recomposer") { frameRecomposer.close() }
+        // Closing the final window posts WM_QUIT. Do it only after scene/recomposer shutdown has
+        // finished posting dispatcher work, or GetMessageW could exit with stale work behind it.
+        disposeStep("unregister the Compose window") { ComposeWindows.unregister(this) }
+    }
+
+    /** Releases the window subclass and StableRef at WM_NCDESTROY, the HWND's final message. */
+    private fun disposeNativeWindow(hwnd: HWND) {
+        if (isNativeCleanupComplete) return
+        isNativeCleanupComplete = true
+        if (dropTarget != null || oleApartment != null) releaseOleDragDrop()
+        disposeStep("detach the Skia layer") { skiaLayer.detach() }
+        releaseSelfReference(hwnd)
+    }
+
+    private inline fun disposeStep(name: String, block: () -> Unit) {
+        try {
+            block()
+        } catch (throwable: Throwable) {
+            reportFailure("Failed to $name:", throwable)
+        }
+    }
+
+    private fun releaseSelfReference(hwnd: HWND) {
+        if (isSelfReferenceDisposed) return
+        isSelfReferenceDisposed = true
         // Clear the back-pointer before freeing it, so nothing can resolve a dangling reference.
-        SetWindowLongPtrW(window, 0, 0)
+        SetWindowLongPtrW(hwnd, 0, 0)
+        selfRef.dispose()
+    }
+
+    private fun releaseSelfReferenceWithoutWindow() {
+        if (isSelfReferenceDisposed) return
+        isSelfReferenceDisposed = true
         selfRef.dispose()
     }
 }
@@ -791,6 +1105,19 @@ private fun reportRenderFailure(throwable: Throwable) {
     if (hasReportedRenderFailure) return
     hasReportedRenderFailure = true
     reportFailure("Exception while rendering a Compose frame:", throwable)
+}
+
+private fun reportOleUnavailable(apartment: OleApartment) {
+    val reason = when (apartment.status) {
+        OleInitializationStatus.ChangedMode ->
+            "the UI thread was already initialized as a multithreaded COM apartment"
+        OleInitializationStatus.Failed ->
+            "OleInitialize returned HRESULT 0x${apartment.hresult.toUInt().toString(16)}"
+        OleInitializationStatus.Initialized,
+        OleInitializationStatus.AlreadyInitialized -> return
+    }
+    println("OLE drag-and-drop is unavailable because $reason.")
+    fflush(null)
 }
 
 /**
@@ -811,7 +1138,7 @@ private val windowClass: UShort by lazy { registerWindowClass() }
 private fun registerWindowClass(): UShort = memScoped {
     // Must precede the first window: it decides whether Windows scales the window for us or hands
     // us real pixels, and whether WM_DPICHANGED is delivered at all.
-    markProcessDpiAware()
+    ensureProcessDpiAwareness()
 
     val windowClass = alloc<WNDCLASSEXW>()
     windowClass.cbSize = sizeOf<WNDCLASSEXW>().convert()
@@ -893,14 +1220,19 @@ private fun dispatchWindowMessage(
     if (message.toInt() == WM_NCCREATE) {
         // The instance travels in `CREATESTRUCTW.lpCreateParams` and is parked in the class's
         // extra window memory, where it stays reachable for every later message.
-        lParam.toCPointer<CREATESTRUCTW>()?.pointed?.lpCreateParams?.let { self ->
-            SetWindowLongPtrW(hwnd, 0, self.toLong())
+        val self = lParam.toCPointer<CREATESTRUCTW>()?.pointed?.lpCreateParams ?: return 0
+        // A zero return can mean either "the previous value was zero" or failure. Clear last-error
+        // first so the second case is distinguishable and abort creation without a dangling ref.
+        SetLastError(0u)
+        val previous = SetWindowLongPtrW(hwnd, 0, self.toLong())
+        if (previous == 0L && GetLastError() != 0u) {
+            return 0
         }
         return DefWindowProcW(hwnd, message, wParam, lParam)
     }
     val window = hwnd?.let(::composeWindowOf)
         ?: return DefWindowProcW(hwnd, message, wParam, lParam)
-    return window.handleMessage(message, wParam, lParam)
+    return window.handleMessage(hwnd, message, wParam, lParam)
         ?: DefWindowProcW(hwnd, message, wParam, lParam)
 }
 

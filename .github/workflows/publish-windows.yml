@@ -1,0 +1,277 @@
+name: Publish Windows variants
+
+# Produces the desktop JVM and mingwX64 part of the fork's Maven repository. The result is an
+# expiring workflow artifact only: this job has read-only permissions and no repository credentials.
+# Apple and web/Android variants are produced by their own host workflows and union-merged later.
+
+on:
+  workflow_dispatch:
+    inputs:
+      compose_ref:
+        description: "Full 40-character commit SHA of archivesteak/compose-multiplatform-core to build"
+        required: true
+      skia_ref:
+        description: "Full 40-character commit SHA of archivesteak/skia to build"
+        required: true
+      skiko_ref:
+        description: "Full 40-character commit SHA of archivesteak/skiko to build"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 240
+    env:
+      MAVEN_REPOSITORY: ${{ github.workspace }}\producer-maven\repository
+      WINLIBS_URL: https://netix.dl.sourceforge.net/project/winlibs-mingw/14.2.0posix-12.0.0-ucrt-r3/winlibs-x86_64-posix-seh-gcc-14.2.0-llvm-19.1.7-mingw-w64ucrt-12.0.0-r3.7z
+      WINLIBS_SHA256: 75bc86c76d085dbd193fe6ab7facb09bbfaf31cb02384c3aeda7050495d7c7d9
+
+    steps:
+      - name: Validate requested source revisions
+        shell: bash
+        env:
+          COMPOSE_REF: ${{ inputs.compose_ref }}
+          SKIA_REF: ${{ inputs.skia_ref }}
+          SKIKO_REF: ${{ inputs.skiko_ref }}
+        run: |
+          for declaration in \
+            "compose_ref=$COMPOSE_REF" \
+            "skia_ref=$SKIA_REF" \
+            "skiko_ref=$SKIKO_REF"; do
+            name=${declaration%%=*}
+            value=${declaration#*=}
+            if [[ ! "$value" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "$name must be a full lowercase 40-character commit SHA"
+              exit 1
+            fi
+          done
+
+      - name: Check out the Compose fork
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.compose_ref }}
+          path: compose-multiplatform-core
+          persist-credentials: false
+
+      - name: Check out the Skia fork
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: archivesteak/skia
+          ref: ${{ inputs.skia_ref }}
+          path: skia
+          persist-credentials: false
+
+      - name: Check out the Skiko fork
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: archivesteak/skiko
+          ref: ${{ inputs.skiko_ref }}
+          path: skiko
+          persist-credentials: false
+
+      - name: Verify checked-out revisions
+        shell: bash
+        env:
+          COMPOSE_REF: ${{ inputs.compose_ref }}
+          SKIA_REF: ${{ inputs.skia_ref }}
+          SKIKO_REF: ${{ inputs.skiko_ref }}
+        run: |
+          for declaration in \
+            "compose-multiplatform-core=$COMPOSE_REF" \
+            "skia=$SKIA_REF" \
+            "skiko=$SKIKO_REF"; do
+            checkout=${declaration%%=*}
+            expected=${declaration#*=}
+            resolved=$(git -C "$checkout" rev-parse HEAD)
+            if [ "$resolved" != "$expected" ]; then
+              echo "$checkout resolved to $resolved, expected $expected"
+              exit 1
+            fi
+          done
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+
+      # Skia's MinGW release build requires LLVM plus UCRT headers/libraries. This exact WinLibs
+      # payload is content-addressed below; its LLVM 19.1.7/UCRT 12 toolchain is the one used for
+      # the local Windows validation, and only its bin directory is added to PATH.
+      - name: Install the pinned MinGW LLVM toolchain
+        shell: bash
+        run: |
+          curl --fail --location --retry 4 --retry-all-errors \
+            --output winlibs.7z "$WINLIBS_URL"
+          printf '%s  %s\n' "$WINLIBS_SHA256" winlibs.7z | sha256sum --check --strict
+          mkdir -p toolchains
+          7z x -y -otoolchains winlibs.7z
+          toolchain_bin=$(cygpath -w "$PWD/toolchains/mingw64/bin")
+          printf '%s\n' "$toolchain_bin" >> "$GITHUB_PATH"
+          ./toolchains/mingw64/bin/clang.exe --version
+          grep -F -- "- LLVM/Clang/LLD/LLDB 19.1.7" toolchains/mingw64/version_info.txt
+          grep -F -- "- MinGW-w64 12.0.0 (linked with ucrt)" toolchains/mingw64/version_info.txt
+
+      - name: Build and verify Skia for mingwX64
+        shell: bash
+        run: |
+          export PATH="$PWD/toolchains/mingw64/bin:$PATH"
+          bash compose-multiplatform-core/.github/scripts/build-skia-mingw.sh skia
+
+      - name: Publish Skiko for desktop JVM and mingwX64
+        shell: pwsh
+        run: |
+          $repository = (New-Item -ItemType Directory -Force $env:MAVEN_REPOSITORY).FullName
+          $skia = (Resolve-Path skia).Path
+          Push-Location skiko\skiko
+          try {
+            .\gradlew.bat --no-daemon --stacktrace `
+              "-Dmaven.repo.local=$repository" `
+              -Pdeploy.release=true `
+              -Pskiko.native.enabled=false `
+              -Pskiko.native.mingw.enabled=true `
+              -Pskiko.awt.enabled=true `
+              -Pskiko.wasm.enabled=false `
+              -Pskiko.android.enabled=false `
+              "-Pskia.dir=$skia" `
+              :publishToMavenLocal
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            Pop-Location
+          }
+
+      - name: Verify Skiko Windows publications
+        shell: pwsh
+        run: |
+          python compose-multiplatform-core/.github/scripts/verify-maven-kmp-publications.py `
+            $env:MAVEN_REPOSITORY `
+            --coordinate io.github.archivesteak.skiko:skiko:0.151.0-alpha04-mingw `
+            --target awt=.jar `
+            --target mingwX64=.klib
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $version = "0.151.0-alpha04-mingw"
+          foreach ($artifact in @("skiko-awt-runtime-windows-x64")) {
+            $directory = Join-Path $env:MAVEN_REPOSITORY "io\github\archivesteak\skiko\$artifact\$version"
+            $jar = Get-ChildItem -LiteralPath $directory -Filter '*.jar' | Where-Object Length -gt 0
+            if ($jar.Count -ne 1) { throw "Expected one nonempty runtime jar in $directory" }
+          }
+
+      - name: Publish the exact Compose Windows consumer closure
+        shell: pwsh
+        working-directory: compose-multiplatform-core
+        run: |
+          .\gradlew.bat --no-daemon --stacktrace --no-configuration-cache --console=plain `
+            "-Dmaven.repo.local=$env:MAVEN_REPOSITORY" `
+            :mpp:publishWindowsConsumerClosureToMavenLocal `
+            "-Pcompose.platforms=jvm,mingwX64" `
+            "-Pandroidx.enabled.kmp.target.platforms=-mac,-js,-wasm"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Collect and close the Windows Maven shard
+        shell: pwsh
+        env:
+          COMPOSE_REF: ${{ inputs.compose_ref }}
+          SKIA_REF: ${{ inputs.skia_ref }}
+          SKIKO_REF: ${{ inputs.skiko_ref }}
+        run: |
+          $staging = Join-Path $env:GITHUB_WORKSPACE 'staging\repository'
+          New-Item -ItemType Directory -Force (Join-Path $staging 'io\github\archivesteak') | Out-Null
+          Copy-Item -Recurse -Force `
+            -Path (Join-Path $env:MAVEN_REPOSITORY 'io\github\archivesteak\*') `
+            (Join-Path $staging 'io\github\archivesteak')
+
+          # The host-specific fat jar collides by coordinate across producer shards. Consumers
+          # select the per-OS jars, so omit the misleading runtime-all publication.
+          $excludedFatRuntimes = @(
+            (Join-Path $staging 'io\github\archivesteak\skiko\skiko-awt-runtime-all')
+          )
+          Remove-Item -LiteralPath $excludedFatRuntimes -Recurse -Force -ErrorAction SilentlyContinue
+
+          python compose-multiplatform-core/.github/scripts/write-provenance.py `
+            --owner windows `
+            --output (Join-Path $staging 'provenance/windows.json') `
+            --source "compose=$env:COMPOSE_REF" `
+            --source "skia=$env:SKIA_REF" `
+            --source "skiko=$env:SKIKO_REF"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          python compose-multiplatform-core/.github/scripts/prune-missing-kmp-redirects.py `
+            $staging `
+            --close-group-prefix io.github.archivesteak
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $familyRoot = Join-Path $staging 'io\github\archivesteak'
+          $unexpected = Get-ChildItem -LiteralPath $familyRoot -Directory | Where-Object {
+            $_.Name -notin @('compose', 'skiko', 'androidx')
+          }
+          if ($unexpected) { throw "Unexpected library families: $($unexpected.FullName -join ', ')" }
+
+          $androidx = Join-Path $familyRoot 'androidx'
+          $unexpectedAndroidx = Get-ChildItem -LiteralPath $androidx -Directory | Where-Object Name -ne 'navigationevent'
+          if ($unexpectedAndroidx) { throw "Unexpected androidx families: $($unexpectedAndroidx.FullName -join ', ')" }
+
+          $navigation = Join-Path $androidx 'navigationevent'
+          $unexpectedNavigation = Get-ChildItem -LiteralPath $navigation -Directory | Where-Object Name -ne 'navigationevent-compose'
+          if ($unexpectedNavigation) { throw "Unexpected navigationevent modules: $($unexpectedNavigation.FullName -join ', ')" }
+
+          $required = @(
+            'io\github\archivesteak\compose\runtime\runtime\1.12.0-beta02-mingw\runtime-1.12.0-beta02-mingw.module',
+            'io\github\archivesteak\compose\ui\ui-test\1.12.0-beta02-mingw\ui-test-1.12.0-beta02-mingw.module',
+            'io\github\archivesteak\compose\ui\ui-uikit\1.12.0-beta02-mingw\ui-uikit-1.12.0-beta02-mingw.module',
+            'io\github\archivesteak\compose\material3\material3\1.12.0-alpha03-mingw\material3-1.12.0-alpha03-mingw.module',
+            'io\github\archivesteak\compose\desktop\desktop-jvm\1.12.0-beta02-mingw\desktop-jvm-1.12.0-beta02-mingw.module',
+            'io\github\archivesteak\compose\desktop\desktop-jvm-windows-x64\1.12.0-beta02-mingw\desktop-jvm-windows-x64-1.12.0-beta02-mingw.pom',
+            'io\github\archivesteak\androidx\navigationevent\navigationevent-compose\1.1.1-beta01-mingw\navigationevent-compose-1.1.1-beta01-mingw.module',
+            'provenance\windows.json'
+          )
+          foreach ($relative in $required) {
+            $path = Join-Path $staging $relative
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing $path" }
+          }
+
+      - name: Verify collected Compose Windows publications
+        shell: pwsh
+        run: |
+          $repository = Join-Path $env:GITHUB_WORKSPACE 'staging\repository'
+          python compose-multiplatform-core/.github/scripts/verify-maven-kmp-publications.py `
+            $repository `
+            --coordinate io.github.archivesteak.compose.material3:material3:1.12.0-alpha03-mingw `
+            --coordinate io.github.archivesteak.compose.foundation:foundation:1.12.0-beta02-mingw `
+            --coordinate io.github.archivesteak.compose.runtime:runtime:1.12.0-beta02-mingw `
+            --coordinate io.github.archivesteak.compose.ui:ui:1.12.0-beta02-mingw `
+            --coordinate io.github.archivesteak.compose.ui:ui-test:1.12.0-beta02-mingw `
+            --coordinate io.github.archivesteak.androidx.navigationevent:navigationevent-compose:1.1.1-beta01-mingw `
+            --target desktop=.jar `
+            --target mingwX64=.klib
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          python compose-multiplatform-core/.github/scripts/verify-maven-kmp-publications.py `
+            $repository `
+            --coordinate io.github.archivesteak.compose.desktop:desktop:1.12.0-beta02-mingw `
+            --target jvm=.jar
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          python compose-multiplatform-core/.github/scripts/verify-maven-dependency-closure.py `
+            $repository `
+            --coordinate io.github.archivesteak.androidx.navigationevent:navigationevent-compose:1.1.1-beta01-mingw `
+            --require-dependency io.github.archivesteak.compose.runtime:runtime:1.12.0-beta02-mingw `
+            --require-dependency androidx.navigationevent:navigationevent:1.1.1 `
+            --forbid-dependency-group-prefix org.jetbrains.compose
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          python compose-multiplatform-core/.github/scripts/verify-upstream-navigationevent.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: maven-windows
+          path: staging/repository
+          if-no-files-found: error
+          retention-days: 7

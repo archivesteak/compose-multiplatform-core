@@ -75,12 +75,16 @@ internal actual fun TextFieldSelectionManager.isSelectionHandleInVisibleBound(
     isStartHandle: Boolean
 ): Boolean = isSelectionHandleInVisibleBoundDefault(isStartHandle)
 
-// TODO: https://youtrack.jetbrains.com/issue/CMP-7819
+// The replacement text-context-menu pipeline is feature-flagged off for every Skiko target in
+// ComposeFoundationFlags. The production path remains CommonContextMenuArea in Text.mingw.kt.
+// Keep this inert until CMP-7819 provides a native menu host; installing half of the replacement
+// pipeline would suppress the functional common menu without giving Windows a provider.
+// https://youtrack.jetbrains.com/issue/CMP-7819
 internal actual fun Modifier.addSelectionContainerTextContextMenuComponents(
     selectionManager: SelectionManager
 ): Modifier = this
 
-// TODO: https://youtrack.jetbrains.com/issue/CMP-7819
+// See the selection-container note above: this hook is unreachable with the supported flag state.
 internal actual fun Modifier.addBasicTextFieldTextContextMenuComponents(
     manager: TextFieldSelectionManager,
     coroutineScope: CoroutineScope,

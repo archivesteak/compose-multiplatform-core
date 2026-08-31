@@ -45,6 +45,7 @@ androidXMultiplatform {
     desktop()
     mac()
     ios()
+    mingwX64()
     js()
     wasmJs()
 
@@ -121,6 +122,7 @@ androidXMultiplatform {
             }
         }
 
+        def lifecycleVersion = project.redirectVersions.get('androidx.lifecycle')
         def navigationEventVersion = project.redirectVersions.get('androidx.navigationevent')
 
         // TODO: Align naming: nonAndroidMain
@@ -131,15 +133,15 @@ androidXMultiplatform {
 
                 // Required to properly resolve supertypes of DefaultArchitectureComponentsOwner
                 // Keep in sync with :ui:ui module
-                implementation("org.jetbrains.androidx.lifecycle:lifecycle-runtime-compose:2.9.6")
-                implementation("org.jetbrains.androidx.lifecycle:lifecycle-viewmodel:2.9.6")
-                implementation("org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-savedstate:2.9.6")
+                implementation("androidx.lifecycle:lifecycle-runtime-compose:$lifecycleVersion")
+                implementation("androidx.lifecycle:lifecycle-viewmodel:$lifecycleVersion")
+                implementation("androidx.lifecycle:lifecycle-viewmodel-savedstate:$lifecycleVersion")
 
                 // Use direct dependency to AOSP's artifact instead of using project reference
                 // because this module supports all KMP platforms from the beginning
                 // Project dependency (commented out version) is required for `integration` branch setup
                 // implementation(project(":navigationevent:navigationevent"))
-                implementation("androidx.navigationevent:navigationevent:1.0.1")
+                implementation("androidx.navigationevent:navigationevent:$navigationEventVersion")
             }
         }
 

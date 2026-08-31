@@ -31,7 +31,9 @@ import kotlinx.cinterop.alloc
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
 import platform.windows.CreateRectRgn
+import platform.windows.DeleteObject
 import platform.windows.DestroyWindow
+import platform.windows.GetLastError
 import platform.windows.HWND
 import platform.windows.RDW_ALLCHILDREN
 import platform.windows.RDW_ERASE
@@ -137,7 +139,10 @@ internal class Win32InteropViewHolder(
             (visible.right.roundToInt() - position.x),
             (visible.bottom.roundToInt() - position.y),
         )
-        SetWindowRgn(interopView, clip, 0)
+        if (clip != null && SetWindowRgn(interopView, clip, 0) == 0) {
+            // Ownership transfers only when SetWindowRgn succeeds.
+            DeleteObject(clip)
+        }
 
         if (!isVisible) {
             isVisible = true
@@ -175,8 +180,27 @@ internal class Win32InteropViewHolder(
     private var isVisible = false
 
     override fun onRelease() {
-        DestroyWindow(interopView)
-        super.onRelease()
+        win32Container.scheduleUpdate {
+            var failure: Throwable? = null
+            try {
+                // The user must receive its live HWND before Compose destroys it.
+                release()
+            } catch (throwable: Throwable) {
+                failure = throwable
+            }
+
+            if (DestroyWindow(interopView) == 0) {
+                val destroyFailure = IllegalStateException(
+                    "DestroyWindow failed for an interop child: ${GetLastError()}"
+                )
+                if (failure == null) {
+                    failure = destroyFailure
+                } else {
+                    failure.addSuppressed(destroyFailure)
+                }
+            }
+            failure?.let { throw it }
+        }
     }
 }
 

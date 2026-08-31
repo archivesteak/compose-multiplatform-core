@@ -65,7 +65,9 @@ internal actual suspend fun TextFieldSelectionState.textFieldSelectionGestures(
     textDragObserver: TextDragObserver
 ) = pointerInputScope.defaultTextFieldSelectionGestures(mouseSelectionObserver, textDragObserver)
 
-// TODO: https://youtrack.jetbrains.com/issue/CMP-7819
+// The new provider-based context-menu pipeline is disabled for Skiko. CommonContextMenuArea is the
+// supported Windows path; this hook must stay inert until CMP-7819 supplies a native menu host.
+// https://youtrack.jetbrains.com/issue/CMP-7819
 internal actual fun Modifier.addBasicTextFieldTextContextMenuComponents(
     state: TextFieldSelectionState,
     coroutineScope: CoroutineScope
@@ -80,7 +82,7 @@ internal actual class ClipboardPasteState actual constructor(private val clipboa
 
     actual suspend fun update() {
         // The Win32 clipboard is only read as text here, so a clip and text are the same thing.
-        _hasText = clipboard.nativeClipboard.getText() != null
+        _hasText = clipboard.getClipEntry() != null
         _hasClip = _hasText
     }
 }

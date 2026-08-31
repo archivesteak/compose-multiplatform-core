@@ -722,6 +722,33 @@ class SkiaGraphicsLayerTest {
     }
 
     @Test
+    fun testModulateAlphaUpdatesWithoutRerecording() {
+        val bgColor = Color.Black
+        graphicsLayerTest(
+            block = { graphicsContext ->
+                val layer =
+                    graphicsContext.createGraphicsLayer().apply {
+                        compositingStrategy = CompositingStrategy.ModulateAlpha
+                        alpha = 0.25f
+                        record { drawRect(Color.Red) }
+                        // Alpha is a replay property. Updating it must not require recording the
+                        // layer again or retain the value that was active during record().
+                        alpha = 0.75f
+                    }
+                drawRect(bgColor)
+                drawLayer(layer)
+            },
+            verify = { pixelMap ->
+                pixelMap.assertPixelColor(
+                    Color.Red.copy(alpha = 0.75f).compositeOver(bgColor),
+                    pixelMap.width / 2,
+                    pixelMap.height / 2,
+                )
+            },
+        )
+    }
+
+    @Test
     fun testTintColorFilter() {
         var layer: GraphicsLayer?
         graphicsLayerTest(
@@ -1049,6 +1076,66 @@ class SkiaGraphicsLayerTest {
                     assertPixelColor(compositedRed, halfWidth + 10, halfHeight + 10)
                 }
             }
+        )
+    }
+
+    @Test
+    fun testSetOutsets_clipOverflowAtExpandedBounds() {
+        val halfWidth = TEST_WIDTH / 2
+        val halfHeight = TEST_HEIGHT / 2
+        val outsetRight = halfWidth / 2
+        val outsetBottom = halfHeight / 2
+        graphicsLayerTest(
+            block = { graphicsContext ->
+                val layer =
+                    graphicsContext.createGraphicsLayer().apply {
+                        record(size = IntSize(halfWidth, halfHeight)) {
+                            drawRect(Color.Red, size = Size(TEST_WIDTH.toFloat(), TEST_HEIGHT.toFloat()))
+                        }
+                        alpha = 0.5f
+                        setOutsets(left = 0, top = 0, right = outsetRight, bottom = outsetBottom)
+                    }
+                drawRect(Color.White)
+                drawLayer(layer)
+            },
+            verify = { pixelMap ->
+                val compositedRed = Color.Red.copy(alpha = 0.5f).compositeOver(Color.White)
+                pixelMap.assertPixelColor(compositedRed, halfWidth + outsetRight - 2, halfHeight / 2)
+                pixelMap.assertPixelColor(compositedRed, halfWidth / 2, halfHeight + outsetBottom - 2)
+                pixelMap.assertPixelColor(Color.White, halfWidth + outsetRight + 2, halfHeight / 2)
+                pixelMap.assertPixelColor(Color.White, halfWidth / 2, halfHeight + outsetBottom + 2)
+            },
+        )
+    }
+
+    @Test
+    fun testSetOutsets_offscreenBoundsFollowLayerTransform() {
+        val layerSize = IntSize(100, 100)
+        val layerPosition = IntOffset(250, 150)
+        graphicsLayerTest(
+            block = { graphicsContext ->
+                val layer = graphicsContext.createGraphicsLayer().apply {
+                    record(size = layerSize) {
+                        drawRect(
+                            Color.Red,
+                            topLeft = Offset(-50f, 0f),
+                            size = Size(150f, 100f),
+                        )
+                    }
+                    topLeft = layerPosition
+                    pivotOffset = Offset(50f, 50f)
+                    rotationZ = 90f
+                    alpha = 0.5f
+                    setOutsets(left = 50, top = 0, right = 0, bottom = 0)
+                }
+                drawLayer(layer)
+            },
+            verify = { pixelMap ->
+                val compositedRed = Color.Red.copy(alpha = 0.5f).compositeOver(Color.Black)
+                pixelMap.assertPixelColor(compositedRed, 300, 125)
+                pixelMap.assertPixelColor(compositedRed, 300, 200)
+                pixelMap.assertPixelColor(Color.Black, 300, 95)
+            },
         )
     }
 

@@ -47,6 +47,7 @@ import platform.windows.DWORDVar
 import platform.windows.GetDateFormatEx
 import platform.windows.GetLocaleInfoEx
 import platform.windows.LOCALE_IFIRSTDAYOFWEEK
+import platform.windows.LOCALE_NOUSEROVERRIDE
 import platform.windows.LOCALE_RETURN_NUMBER
 import platform.windows.LOCALE_SDAYNAME1
 import platform.windows.LOCALE_SDAYNAME2
@@ -112,13 +113,16 @@ internal actual class PlatformDateFormat actual constructor(private val locale: 
         skeleton: String,
         cache: MutableMap<String, Any>
     ): String {
-        return when (skeleton) {
+        return when {
             // Windows' "long date" is the full form, weekday included.
-            DatePickerDefaults.YearMonthWeekdayDaySkeleton ->
-                formatDate(utcTimeMillis, flags = DATE_LONGDATE.convert())
+            skeleton.hasSameDateFieldsAs(DatePickerDefaults.YearMonthWeekdayDaySkeleton) ->
+                formatDate(
+                    utcTimeMillis,
+                    flags = (DATE_LONGDATE or LOCALE_NOUSEROVERRIDE.toInt()).convert(),
+                )
 
             // The same form without the weekday and with the month abbreviated.
-            DatePickerDefaults.YearAbbrMonthDaySkeleton -> {
+            skeleton.hasSameDateFieldsAs(DatePickerDefaults.YearAbbrMonthDaySkeleton) -> {
                 val picture = cache.getOrPut("S:$skeleton:$localeName") {
                     localeText(LOCALE_SLONGDATE)
                         ?.withoutWeekday()
@@ -129,7 +133,7 @@ internal actual class PlatformDateFormat actual constructor(private val locale: 
             }
 
             // Windows keeps a dedicated picture for a year-and-month heading.
-            DatePickerDefaults.YearMonthSkeleton -> {
+            skeleton.hasSameDateFieldsAs(DatePickerDefaults.YearMonthSkeleton) -> {
                 val picture = localeText(LOCALE_SYEARMONTH)
                     ?: return formatWithPattern(utcTimeMillis, skeleton, cache)
                 formatDate(utcTimeMillis, picture)
@@ -200,10 +204,15 @@ internal actual class PlatformDateFormat actual constructor(private val locale: 
 
     /** Reads a string locale property, sizing the buffer from the first call. */
     private fun localeText(lcType: Int): String? = memScoped {
-        val needed = GetLocaleInfoEx(localeName, lcType.convert(), null, 0)
+        // A CalendarLocale describes the requested locale, not the user's Control Panel
+        // overrides. Without LOCALE_NOUSEROVERRIDE, asking for en-US on a machine whose user
+        // locale is en-US can unexpectedly return that user's custom date pictures instead of
+        // the en-US ones.
+        val type = lcType or LOCALE_NOUSEROVERRIDE.toInt()
+        val needed = GetLocaleInfoEx(localeName, type.convert(), null, 0)
         if (needed <= 0) return@memScoped null
         val buffer = allocArray<WCHARVar>(needed)
-        val written = GetLocaleInfoEx(localeName, lcType.convert(), buffer, needed)
+        val written = GetLocaleInfoEx(localeName, type.convert(), buffer, needed)
         // The returned length counts the terminating NUL.
         if (written <= 1) null else buffer.readUtf16(written - 1)
     }
@@ -213,7 +222,7 @@ internal actual class PlatformDateFormat actual constructor(private val locale: 
         val written =
             GetLocaleInfoEx(
                 localeName,
-                (lcType or LOCALE_RETURN_NUMBER).convert(),
+                (lcType or LOCALE_RETURN_NUMBER or LOCALE_NOUSEROVERRIDE.toInt()).convert(),
                 value.ptr.reinterpret(),
                 // With LOCALE_RETURN_NUMBER the buffer receives a DWORD; cchData counts WCHARs.
                 2,
@@ -314,6 +323,30 @@ private fun String.withoutWeekday(): String =
 
 /** Turns a full month name element into the abbreviated one. */
 private fun String.abbreviatingMonthName(): String = replace("MMMM", "MMM")
+
+/**
+ * ICU skeleton field order is insignificant: `yMMMd` and `dMMMy` request the same localized
+ * fields. NLS exposes locale date pictures rather than an ICU best-pattern generator, so matching
+ * the supported date-picker skeletons by their field multiset preserves that contract before the
+ * corresponding Windows picture is selected.
+ */
+private fun String.hasSameDateFieldsAs(reference: String): Boolean =
+    skeletonFieldCounts()?.let { it == reference.skeletonFieldCounts() } == true
+
+private fun String.skeletonFieldCounts(): Map<Char, Int>? {
+    val counts = mutableMapOf<Char, Int>()
+    for (field in this) {
+        if (!field.isLetter()) return null
+        val canonicalField = when (field) {
+            'u', 'Y' -> 'y'
+            'L' -> 'M'
+            'e', 'c' -> 'E'
+            else -> field
+        }
+        counts[canonicalField] = counts.getOrElse(canonicalField) { 0 } + 1
+    }
+    return counts
+}
 
 /** The characters outside `'`-quoted literals, so field letters can be told from text. */
 private fun String.outsideLiterals(): Sequence<Char> = sequence {

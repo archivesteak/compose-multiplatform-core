@@ -224,11 +224,13 @@ internal class Win32TextInputService : PlatformTextInputService {
     private fun compositionString(context: platform.windows.HIMC?, index: UInt): String? = memScoped {
         // The first call reports the size in *bytes*, not characters.
         val bytes = ImmGetCompositionStringW(context, index, null, 0u)
-        if (bytes <= 0) return@memScoped null
+        if (bytes <= 0 || bytes % 2 != 0) return@memScoped null
         val characters = bytes / 2
         val buffer = allocArray<WCHARVar>(characters)
         val written = ImmGetCompositionStringW(context, index, buffer, bytes.convert())
-        if (written <= 0) return@memScoped null
+        // The composition can change between the size query and the copy. Never trust a reported
+        // length larger than the buffer supplied to IMM32, and reject a truncated UTF-16 unit.
+        if (written <= 0 || written > bytes || written % 2 != 0) return@memScoped null
         buffer.readUtf16(written / 2)
     }
 

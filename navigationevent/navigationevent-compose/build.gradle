@@ -31,30 +31,43 @@ plugins {
 }
 
 androidXMultiplatform {
-    redirect("androidx.navigationevent") {
-        androidLibrary {
-            compileSdk = 36
-            namespace = "org.jetbrains.androidx.navigationevent.compose"
-
-        }
-        desktop()
-        mac()
-        linux()
-        ios()
-        watchos()
-        tvos()
-        mingwX64()
-        js()
-        wasmJs()
+    // This module is part of the fork's producer closure: consumers of ui-backhandler and
+    // adaptive-navigation3 resolve it at the fork coordinate, including on mingwX64. Declaring the
+    // targets inside redirect { } would publish empty stubs of the upstream module and discard both
+    // these sources and the fork-runtime dependency below.
+    androidLibrary {
+        compileSdk = 36
+        namespace = "org.jetbrains.androidx.navigationevent.compose"
     }
+    desktop()
+    mac()
+    linux()
+    ios()
+    watchos()
+    tvos()
+    mingwX64()
+    js()
+    wasmJs()
 
     defaultPlatform(PlatformIdentifier.ANDROID)
 
     sourceSets {
+        // The shared host-default actual is valid for every non-Android platform. Wire that real
+        // source set into all three default-hierarchy branches now that this is no longer an empty
+        // redirected stub.
+        create("nonAndroidMain").dependsOn(commonMain)
+        desktopMain.dependsOn(nonAndroidMain)
+        nativeMain.dependsOn(nonAndroidMain)
+        webMain.dependsOn(nonAndroidMain)
+
         commonMain.dependencies {
-            // Keep direct references to fork versions to correctly resolve
-            // new redirections to Google's artifacts.
-            api("org.jetbrains.compose.runtime:runtime:1.11.0")
+            // The base event API is a platform-complete AndroidX library; only its Compose bridge is
+            // fork-built here. Keeping this dependency upstream avoids inventing an unpublished fork
+            // coordinate for navigationevent itself.
+            api("androidx.navigationevent:navigationevent:1.1.1")
+            // Keep the published graph inside this fork. A direct upstream 1.11 dependency would
+            // mix two Compose runtimes in consumers of the fork's 1.12 artifacts.
+            api(project(":compose:runtime:runtime"))
         }
     }
 }

@@ -27,6 +27,7 @@ import kotlin.test.Test
 //TODO: currently ICU skeleton is not supported on JVM.
 // Remove this condition or set it to true in desktopTest when supported
 expect val supportsDateSkeleton : Boolean
+expect val expectedKoreanDateInputFormat: String
 
 expect fun getTimeZone() : String
 expect fun setTimeZone(id : String)
@@ -408,9 +409,11 @@ internal class KotlinxDatetimeCalendarModelTest {
 
         locale = calendarLocale("ko","KR")
         model = KotlinxDatetimeCalendarModel(locale)
-        assertThat(model.getDateInputFormat(locale).patternWithDelimiters).isEqualTo("yyyy.MM.dd")
+        assertThat(model.getDateInputFormat(locale).patternWithDelimiters)
+            .isEqualTo(expectedKoreanDateInputFormat)
         assertThat(model.getDateInputFormat(locale).patternWithoutDelimiters).isEqualTo("yyyyMMdd")
-        assertThat(model.getDateInputFormat(locale).delimiter).isEqualTo('.')
+        assertThat(model.getDateInputFormat(locale).delimiter)
+            .isEqualTo(expectedKoreanDateInputFormat.first { !it.isLetter() })
 
         locale = calendarLocale("es","CL")
         model = KotlinxDatetimeCalendarModel(locale)
