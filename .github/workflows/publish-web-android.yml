@@ -102,19 +102,6 @@ jobs:
       - name: Point the build at the Android SDK
         run: echo "sdk.dir=$ANDROID_HOME" > compose-multiplatform-core/local.properties
 
-      # Keeping skiko's AWT publication enabled makes its root Gradle module metadata usable by
-      # Compose's desktop compilations. Install the Linux headers listed by skiko's DEVELOPMENT.md;
-      # its JVM bindings compile against DBus, Fontconfig, OpenGL/GLX, X11 and XRandR.
-      - name: Install skiko Linux prerequisites
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y \
-            fontconfig \
-            libdbus-1-dev \
-            libfontconfig1-dev \
-            libglu1-mesa-dev \
-            libxrandr-dev
-
       # skiko's web targets link a wasm side module with emcc. Upstream pins Emscripten 4.0.7
       # (skiko/.github/workflows/tests.yml); only its bin directory goes on PATH.
       - name: Install Emscripten
@@ -127,11 +114,10 @@ jobs:
           echo "$PWD/emsdk/upstream/emscripten" >> "$GITHUB_PATH"
 
       # skiko must land in mavenLocal first: the Compose fork's js/wasmJs sources resolve it from
-      # there by coordinate. skiko.wasm.enabled gates both the js and wasmJs targets; awt stays on
-      # because the desktop (jvm) compilations also contain skikoMain and the Kotlin 2.4 metadata
-      # visibility rule drops any dependency that does not resolve in *every* such compilation.
-      # deploy.release=true withholds the -SNAPSHOT suffix, matching the version the Windows
-      # publish and the Compose fork both use.
+      # there by coordinate. skiko.wasm.enabled gates both web targets. This shard owns only web
+      # and Android, so disable AWT explicitly; the Windows shard owns the JVM/AWT variants and the
+      # strict final union combines the disjoint root metadata. deploy.release=true withholds the
+      # -SNAPSHOT suffix, matching the version the Windows publish and the Compose fork both use.
       - name: Build and publish skiko (js + wasmJs + Android)
         working-directory: skiko/skiko
         run: |
@@ -140,6 +126,7 @@ jobs:
             -Pdeploy.release=true \
             -Pskiko.wasm.enabled=true \
             -Pskiko.android.enabled=true \
+            -Pskiko.awt.enabled=false \
             -Pskiko.native.mingw.enabled=false
 
       - name: Verify skiko web and Android publications
