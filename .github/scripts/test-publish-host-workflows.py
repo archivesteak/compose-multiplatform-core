@@ -84,6 +84,15 @@ class PublishHostWorkflowsTest(unittest.TestCase):
         self.assertIn("publishLinuxArm64PublicationToMavenLocal", web)
         self.assertIn("publishLinuxX64PublicationToMavenLocal", web)
 
+    def test_web_runtime_verification_uses_supported_configuration_mode(self) -> None:
+        web = self.texts()["web"]
+        verification = web.split(
+            "- name: Verify Compose web runtime integration", 1
+        )[1].split("- name: Collect the published artifacts", 1)[0]
+        self.assertIn("--no-parallel", verification)
+        self.assertIn("--no-configuration-cache", verification)
+        self.assertIn("--no-configure-on-demand", verification)
+
     def test_fork_coordinates_and_provenance_contract_match(self) -> None:
         texts = self.texts()
         for owner, text in texts.items():
