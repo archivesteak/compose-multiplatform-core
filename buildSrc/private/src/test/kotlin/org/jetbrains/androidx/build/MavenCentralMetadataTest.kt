@@ -102,7 +102,11 @@ class MavenCentralMetadataTest {
         assertEquals(ZipEntryCompression.STORED, jarTask.entryCompression)
         assertEquals(420, jarTask.filePermissions.get().toUnixNumeric())
         assertEquals(493, jarTask.dirPermissions.get().toUnixNumeric())
-        assertTrue(jarTask.source.files.contains(readme))
+        assertTrue(
+            jarTask.source.files
+                .map { sourceFile -> sourceFile.canonicalFile }
+                .contains(readme.canonicalFile)
+        )
         assertTrue(javadocArtifact.buildDependencies.getDependencies(jarTask).contains(jarTask))
         val publishTask = project.tasks.named("publishBinaryPublicationToMavenLocal").get()
         assertTrue(publishTask.taskDependencies.getDependencies(publishTask).contains(jarTask))
