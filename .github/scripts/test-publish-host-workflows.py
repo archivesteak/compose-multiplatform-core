@@ -94,10 +94,10 @@ class PublishHostWorkflowsTest(unittest.TestCase):
 
         windows = texts["windows"]
         awt = windows.split("- name: Publish Skiko for desktop JVM", 1)[1].split(
-            "- name: Publish Skiko for mingwX64 and merge root metadata", 1
+            "- name: Publish Skiko for mingwX64 and complete root metadata", 1
         )[0]
         mingw = windows.split(
-            "- name: Publish Skiko for mingwX64 and merge root metadata", 1
+            "- name: Publish Skiko for mingwX64 and complete root metadata", 1
         )[1].split("- name: Verify Skiko Windows publications", 1)[0]
         for task in (
             "publishKotlinMultiplatformPublicationToMavenLocal",
@@ -110,12 +110,9 @@ class PublishHostWorkflowsTest(unittest.TestCase):
         self.assertNotIn("skia.dir", awt)
         self.assertNotIn(":publishToMavenLocal", awt)
         self.assertIn(":publishMingwX64PublicationToMavenLocal", mingw)
-        self.assertIn(":generateMetadataFileForKotlinMultiplatformPublication", mingw)
-        self.assertIn(":buildKotlinToolingMetadata", mingw)
+        self.assertIn(":publishKotlinMultiplatformPublicationToMavenLocal", mingw)
         self.assertIn("-Pskia.dir=", mingw)
-        self.assertIn("--include-variant mingwX64ApiElements-published", mingw)
-        self.assertIn("--include-variant mingwX64SourcesElements-published", mingw)
-        self.assertIn("--include-konan-target mingw_x64", mingw)
+        self.assertNotIn("merge-gradle-module-metadata.py", mingw)
         self.assertNotIn(":skiko-skottie:", mingw)
         self.assertIn("skiko-awt-runtime-angle-windows-x64", windows)
         self.assertIn('Join-Path $directory "$artifact-$version.jar"', windows)

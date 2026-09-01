@@ -139,7 +139,8 @@ jobs:
 
       # skia.dir is a source-tree override for every enabled Skiko ABI. A MinGW Skia tree contains
       # GNU archives, while the desktop JVM runtime requires the official MSVC/COFF Skia payload.
-      # Publish those two ABI closures separately, then union only the MinGW root metadata below.
+      # Publish those two ABI closures separately, then republish the complete KMP root from the
+      # combined AWT + MinGW graph so its metadata JAR, sources, module, and tooling stay coherent.
       - name: Publish Skiko for desktop JVM
         shell: pwsh
         run: |
@@ -167,7 +168,7 @@ jobs:
             Pop-Location
           }
 
-      - name: Publish Skiko for mingwX64 and merge root metadata
+      - name: Publish Skiko for mingwX64 and complete root metadata
         shell: pwsh
         run: |
           $repository = (Resolve-Path $env:MAVEN_REPOSITORY).Path
@@ -186,22 +187,11 @@ jobs:
               "-Pskiko.android.enabled=false" `
               "-Pskia.dir=$skia" `
               :publishMingwX64PublicationToMavenLocal `
-              :generateMetadataFileForKotlinMultiplatformPublication `
-              :buildKotlinToolingMetadata
+              :publishKotlinMultiplatformPublicationToMavenLocal
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           } finally {
             Pop-Location
           }
-
-          python release-contract/.github/scripts/merge-gradle-module-metadata.py `
-            skiko\skiko\build\publications\kotlinMultiplatform\module.json `
-            $repository `
-            --source-tooling-metadata skiko\skiko\build\kotlinToolingMetadata\kotlin-tooling-metadata.json `
-            --include-variant mingwX64ApiElements-published `
-            --include-variant mingwX64SourcesElements-published `
-            --require-variant mingwX64ApiElements-published `
-            --include-konan-target mingw_x64
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify Skiko Windows publications
         shell: pwsh
