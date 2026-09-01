@@ -39,6 +39,26 @@ HASH_SUFFIXES = {
     ".sha256": "sha256",
     ".sha512": "sha512",
 }
+PROJECT_STRUCTURE_ENTRY = "META-INF/kotlin-project-structure-metadata.json"
+SOURCE_TEXT_SUFFIXES = {
+    ".c",
+    ".cc",
+    ".cpp",
+    ".h",
+    ".hpp",
+    ".java",
+    ".js",
+    ".json",
+    ".kt",
+    ".kts",
+    ".m",
+    ".md",
+    ".mm",
+    ".properties",
+    ".swift",
+    ".txt",
+    ".xml",
+}
 NATIVE_PLATFORMS = {
     "mingw_x64": "mingwX64",
     "linux_x64": "linuxX64",
@@ -301,6 +321,20 @@ def write_json_atomic(path: Path, value: Mapping[str, Any]) -> None:
     finally:
         if temporary.exists():
             temporary.unlink()
+
+
+def write_bytes_atomic(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(data)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def stable_version(version: str, context: str) -> None:
@@ -928,8 +962,331 @@ def files_equivalent(first: Path, second: Path) -> bool:
     if files_equal(first, second):
         return True
     if first.suffix.lower() in {".jar", ".zip"} and second.suffix.lower() == first.suffix.lower():
-        return archive_entries(first) == archive_entries(second)
+        first_entries = archive_entries(first)
+        second_entries = archive_entries(second)
+        if set(first_entries) != set(second_entries):
+            return False
+        for name, first_data in first_entries.items():
+            second_data = second_entries[name]
+            if first_data == second_data:
+                continue
+            if (
+                name != "META-INF/MANIFEST.MF"
+                and Path(name).suffix.lower() in SOURCE_TEXT_SUFFIXES
+                and first_data.replace(b"\r\n", b"\n")
+                == second_data.replace(b"\r\n", b"\n")
+            ):
+                continue
+            return False
+        return True
+    if first.suffix.lower() == ".pom" and second.suffix.lower() == ".pom":
+        first_root = load_pom(first)
+        second_root = load_pom(second)
+        return (
+            pom_static_semantic(first_root) == pom_static_semantic(second_root)
+            and pom_dependency_semantics(first_root) == pom_dependency_semantics(second_root)
+        )
     return False
+
+
+def load_json_bytes(data: bytes, description: str) -> dict[str, Any]:
+    try:
+        value = json.loads(
+            data.decode("utf-8"),
+            object_pairs_hook=reject_duplicate_json_keys,
+            parse_constant=reject_non_finite_json_number,
+        )
+    except (UnicodeError, json.JSONDecodeError, MergeError) as error:
+        raise MergeError(f"cannot read {description}: {error}") from error
+    if not isinstance(value, dict):
+        raise MergeError(f"{description} must contain a JSON object")
+    return value
+
+
+def ordered_union(sequences: Iterable[Sequence[str]]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for sequence in sequences:
+        for value in sequence:
+            if not isinstance(value, str) or not value:
+                raise MergeError(f"project-structure metadata contains invalid name {value!r}")
+            if value not in seen:
+                seen.add(value)
+                result.append(value)
+    return result
+
+
+def merge_project_structure_metadata(
+    documents: Sequence[tuple[str, Path, bytes]],
+    variant_owners: Mapping[str, str],
+    common_owner: str,
+) -> tuple[bytes, dict[str, str]]:
+    structures: list[tuple[str, Path, dict[str, Any]]] = []
+    for owner, path, data in documents:
+        document = load_json_bytes(data, f"Kotlin project-structure metadata in {path}")
+        structure = document.get("projectStructure")
+        if not isinstance(structure, dict):
+            raise MergeError(f"Kotlin project-structure metadata in {path} has no projectStructure")
+        structures.append((owner, path, structure))
+
+    _, base_path, base_structure = structures[0]
+    scalar_keys = set(base_structure) - {"variants", "sourceSets"}
+    for _, path, structure in structures[1:]:
+        if set(structure) - {"variants", "sourceSets"} != scalar_keys:
+            raise MergeError(
+                f"Kotlin project-structure scalar keys differ between {base_path} and {path}"
+            )
+        for key in scalar_keys:
+            if structure.get(key) != base_structure.get(key):
+                raise MergeError(
+                    f"Kotlin project-structure {key} differs between {base_path} and {path}"
+                )
+
+    variants_by_name: dict[str, list[tuple[str, Path, dict[str, Any]]]] = {}
+    variant_order: list[str] = []
+    source_sets_by_name: dict[str, list[tuple[str, Path, dict[str, Any]]]] = {}
+    source_set_order: list[str] = []
+    for owner, path, structure in structures:
+        variants = structure.get("variants")
+        source_sets = structure.get("sourceSets")
+        if not isinstance(variants, list) or not isinstance(source_sets, list):
+            raise MergeError(f"Kotlin project-structure metadata in {path} has invalid arrays")
+        document_variant_names: set[str] = set()
+        for variant in variants:
+            if not isinstance(variant, dict) or not isinstance(variant.get("name"), str):
+                raise MergeError(f"Kotlin project-structure metadata in {path} has invalid variant")
+            name = variant["name"]
+            if name in document_variant_names:
+                raise MergeError(f"Kotlin project-structure metadata in {path} repeats variant {name}")
+            document_variant_names.add(name)
+            if name not in variant_owners:
+                continue
+            if name not in variants_by_name:
+                variants_by_name[name] = []
+                variant_order.append(name)
+            variants_by_name[name].append((owner, path, variant))
+        document_source_set_names: set[str] = set()
+        for source_set in source_sets:
+            if not isinstance(source_set, dict) or not isinstance(source_set.get("name"), str):
+                raise MergeError(
+                    f"Kotlin project-structure metadata in {path} has invalid source set"
+                )
+            name = source_set["name"]
+            if name in document_source_set_names:
+                raise MergeError(
+                    f"Kotlin project-structure metadata in {path} repeats source set {name}"
+                )
+            document_source_set_names.add(name)
+            if name not in source_sets_by_name:
+                source_sets_by_name[name] = []
+                source_set_order.append(name)
+            source_sets_by_name[name].append((owner, path, source_set))
+
+    merged_variants: list[dict[str, Any]] = []
+    referenced_source_sets: set[str] = set()
+    source_set_consumers: dict[str, set[str]] = {}
+    for name in variant_order:
+        candidates = variants_by_name[name]
+        merged = copy.deepcopy(candidates[0][2])
+        source_sequences: list[list[str]] = []
+        for _, path, candidate in candidates:
+            source_set = candidate.get("sourceSet")
+            if not isinstance(source_set, list):
+                raise MergeError(f"Kotlin project-structure variant {name} in {path} has no sourceSet")
+            comparable = {key: value for key, value in candidate.items() if key != "sourceSet"}
+            expected = {key: value for key, value in merged.items() if key != "sourceSet"}
+            if comparable != expected:
+                raise MergeError(
+                    f"Kotlin project-structure variant {name} differs between hosts"
+                )
+            source_sequences.append(source_set)
+        merged_sources = ordered_union(
+            sorted(source_sequences, key=lambda values: (-len(values), tuple(values)))
+        )
+        merged["sourceSet"] = merged_sources
+        referenced_source_sets.update(merged_sources)
+        for source_set in merged_sources:
+            source_set_consumers.setdefault(source_set, set()).add(variant_owners[name])
+        merged_variants.append(merged)
+
+    # Include the complete dependsOn closure of every selected target variant.
+    while True:
+        expanded = set(referenced_source_sets)
+        for name in referenced_source_sets:
+            for _, path, source_set in source_sets_by_name.get(name, []):
+                depends_on = source_set.get("dependsOn", [])
+                if not isinstance(depends_on, list):
+                    raise MergeError(
+                        f"Kotlin project-structure source set {name} in {path} has invalid dependsOn"
+                    )
+                expanded.update(ordered_union([depends_on]))
+        if expanded == referenced_source_sets:
+            break
+        referenced_source_sets = expanded
+
+    missing_source_sets = referenced_source_sets - set(source_sets_by_name)
+    if missing_source_sets:
+        raise MergeError(
+            "Kotlin project-structure metadata references missing source sets: "
+            + ", ".join(sorted(missing_source_sets))
+        )
+
+    merged_source_sets: list[dict[str, Any]] = []
+    for name in source_set_order:
+        if name not in referenced_source_sets:
+            continue
+        candidates = source_sets_by_name[name]
+        merged: dict[str, Any] = {"name": name}
+        depends_on: list[list[str]] = []
+        module_dependencies: list[list[str]] = []
+        host_specific_values: list[Any] = []
+        for _, path, candidate in candidates:
+            raw_depends_on = candidate.get("dependsOn", [])
+            raw_module_dependencies = candidate.get("moduleDependency", [])
+            if not isinstance(raw_depends_on, list) or not isinstance(raw_module_dependencies, list):
+                raise MergeError(
+                    f"Kotlin project-structure source set {name} in {path} has invalid dependencies"
+                )
+            depends_on.append(raw_depends_on)
+            module_dependencies.append(raw_module_dependencies)
+            host_specific_values.append(candidate.get("hostSpecific"))
+            for key, value in candidate.items():
+                if key in {"name", "dependsOn", "moduleDependency", "hostSpecific"}:
+                    continue
+                if key in merged and merged[key] != value:
+                    raise MergeError(
+                        f"Kotlin project-structure source set {name}.{key} differs between hosts"
+                    )
+                merged[key] = copy.deepcopy(value)
+        merged["dependsOn"] = ordered_union(depends_on)
+        merged["moduleDependency"] = ordered_union(module_dependencies)
+        # A source set is globally host-specific only when every host that describes it says so.
+        if host_specific_values and all(value == "true" for value in host_specific_values):
+            merged["hostSpecific"] = "true"
+        merged_source_sets.append(merged)
+
+    source_set_owners: dict[str, str] = {}
+    for name in referenced_source_sets:
+        consumers = source_set_consumers.get(name, set())
+        if name == "commonMain":
+            source_set_owners[name] = common_owner
+            continue
+        if len(consumers) == 1:
+            source_set_owners[name] = next(iter(consumers))
+            continue
+        portable_owners = {
+            owner
+            for owner, _, source_set in source_sets_by_name[name]
+            if source_set.get("hostSpecific") != "true"
+        }
+        if len(portable_owners) == 1:
+            source_set_owners[name] = next(iter(portable_owners))
+        elif common_owner in portable_owners:
+            source_set_owners[name] = common_owner
+        else:
+            raise MergeError(
+                f"cannot select an authoritative host for shared source set {name}: "
+                f"consumers={sorted(consumers)}, portableOwners={sorted(portable_owners)}"
+            )
+
+    merged_structure = {
+        key: copy.deepcopy(value)
+        for key, value in base_structure.items()
+        if key not in {"variants", "sourceSets"}
+    }
+    merged_structure["variants"] = merged_variants
+    merged_structure["sourceSets"] = merged_source_sets
+    data = (
+        json.dumps(
+            {"projectStructure": merged_structure},
+            indent=2,
+            ensure_ascii=False,
+            sort_keys=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+    return data, source_set_owners
+
+
+def merge_archive_payloads(
+    sources: Sequence[tuple[str, Path]],
+    variant_owners: Mapping[str, str],
+    common_owner: str,
+) -> dict[str, bytes]:
+    entry_candidates: dict[str, list[tuple[str, Path, bytes]]] = {}
+    project_structures: list[tuple[str, Path, bytes]] = []
+    for owner, source in sources:
+        entries = archive_entries(source)
+        project_structure = entries.pop(PROJECT_STRUCTURE_ENTRY, None)
+        if project_structure is not None:
+            project_structures.append((owner, source, project_structure))
+        for name, data in entries.items():
+            if name != "META-INF/MANIFEST.MF" and Path(name).suffix.lower() in SOURCE_TEXT_SUFFIXES:
+                data = data.replace(b"\r\n", b"\n")
+            entry_candidates.setdefault(name, []).append((owner, source, data))
+    source_set_owners: dict[str, str] = {}
+    merged_project_structure: bytes | None = None
+    if project_structures:
+        if len(project_structures) != len(sources):
+            raise MergeError(
+                f"only some host-sharded archives contain {PROJECT_STRUCTURE_ENTRY}"
+            )
+        merged_project_structure, source_set_owners = merge_project_structure_metadata(
+            project_structures,
+            variant_owners,
+            common_owner,
+        )
+    result: dict[str, bytes] = {}
+    for name, candidates in entry_candidates.items():
+        distinct = {data for _, _, data in candidates}
+        if len(distinct) == 1:
+            result[name] = candidates[0][2]
+            continue
+        source_set = name.split("/", 1)[0] if "/default/" in name else None
+        authoritative_owner = source_set_owners.get(source_set or "")
+        authoritative = next(
+            (data for owner, _, data in candidates if owner == authoritative_owner),
+            None,
+        )
+        if authoritative is None:
+            locations = ", ".join(f"{owner}:{path}" for owner, path, _ in candidates)
+            raise MergeError(
+                f"host-sharded archive entry {name!r} differs without an authoritative "
+                f"source-set owner ({locations})"
+            )
+        result[name] = authoritative
+    if merged_project_structure is not None:
+        result[PROJECT_STRUCTURE_ENTRY] = merged_project_structure
+    return result
+
+
+def write_archive_atomic(path: Path, entries: Mapping[str, bytes]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    try:
+        with zipfile.ZipFile(
+            temporary,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+            compresslevel=9,
+        ) as archive:
+            ordered_names = sorted(
+                entries,
+                key=lambda name: (name != "META-INF/MANIFEST.MF", name),
+            )
+            for name in ordered_names:
+                info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.create_system = 3
+                info.external_attr = 0o100644 << 16
+                archive.writestr(info, entries[name])
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def checksum(path: Path, algorithm: str) -> str:
@@ -992,6 +1349,148 @@ def load_pom(path: Path) -> ElementTree.Element:
     if root.tag.rsplit("}", 1)[-1] != "project":
         raise MergeError(f"Maven POM {path} has no project root")
     return root
+
+
+def xml_semantic(element: ElementTree.Element) -> tuple[Any, ...]:
+    return (
+        element.tag.rsplit("}", 1)[-1],
+        tuple(sorted((key.rsplit("}", 1)[-1], value) for key, value in element.attrib.items())),
+        (element.text or "").strip(),
+        tuple(xml_semantic(child) for child in element),
+    )
+
+
+def pom_static_semantic(root: ElementTree.Element) -> tuple[Any, ...]:
+    return tuple(
+        xml_semantic(child)
+        for child in root
+        if child.tag.rsplit("}", 1)[-1] not in {"dependencies", "dependencyManagement"}
+    )
+
+
+def pom_dependency_semantics(root: ElementTree.Element) -> set[tuple[str, tuple[Any, ...]]]:
+    result: set[tuple[str, tuple[Any, ...]]] = set()
+    for child in root:
+        local_name = child.tag.rsplit("}", 1)[-1]
+        if local_name == "dependencies":
+            for dependency in child:
+                if dependency.tag.rsplit("}", 1)[-1] == "dependency":
+                    result.add(("direct", xml_semantic(dependency)))
+        elif local_name == "dependencyManagement":
+            for managed in child:
+                if managed.tag.rsplit("}", 1)[-1] != "dependencies":
+                    continue
+                for dependency in managed:
+                    if dependency.tag.rsplit("}", 1)[-1] == "dependency":
+                        result.add(("managed", xml_semantic(dependency)))
+    return result
+
+
+def pom_dependency_key(element: ElementTree.Element, kind: str) -> tuple[str, ...]:
+    return (
+        kind,
+        xml_child_text(element, "groupId") or "",
+        xml_child_text(element, "artifactId") or "",
+        xml_child_text(element, "type") or "jar",
+        xml_child_text(element, "classifier") or "",
+        xml_child_text(element, "scope") or "compile",
+        xml_child_text(element, "optional") or "false",
+    )
+
+
+def merge_pom_documents(candidates: Sequence[tuple[str, Path]]) -> bytes:
+    def parse_with_comments(path: Path) -> ElementTree.Element:
+        data = path.read_bytes()
+        if b"<!DOCTYPE" in data.upper():
+            raise MergeError(f"Maven POM {path} contains a forbidden DOCTYPE")
+        try:
+            parser = ElementTree.XMLParser(
+                target=ElementTree.TreeBuilder(insert_comments=True)
+            )
+            return ElementTree.fromstring(data, parser=parser)
+        except ElementTree.ParseError as error:
+            raise MergeError(f"invalid Maven POM {path}: {error}") from error
+
+    base = parse_with_comments(candidates[0][1])
+    namespace = base.tag.partition("}")[0].removeprefix("{") if "}" in base.tag else ""
+    qualified = lambda name: f"{{{namespace}}}{name}" if namespace else name
+
+    def child_named(parent: ElementTree.Element, name: str) -> ElementTree.Element | None:
+        return next(
+            (
+                child
+                for child in parent
+                if isinstance(child.tag, str) and child.tag.rsplit("}", 1)[-1] == name
+            ),
+            None,
+        )
+
+    direct = child_named(base, "dependencies")
+    management = child_named(base, "dependencyManagement")
+    managed = child_named(management, "dependencies") if management is not None else None
+
+    def ensure_container(kind: str) -> ElementTree.Element:
+        nonlocal direct, management, managed
+        if kind == "direct":
+            if direct is None:
+                direct = ElementTree.Element(qualified("dependencies"))
+                base.append(direct)
+            return direct
+        if management is None:
+            management = ElementTree.Element(qualified("dependencyManagement"))
+            direct_index = list(base).index(direct) if direct is not None else len(base)
+            base.insert(direct_index, management)
+        if managed is None:
+            managed = ElementTree.SubElement(management, qualified("dependencies"))
+        return managed
+
+    merged: dict[tuple[str, ...], tuple[Any, ...]] = {}
+    for kind, container in (("managed", managed), ("direct", direct)):
+        if container is None:
+            continue
+        for dependency in container:
+            if not isinstance(dependency.tag, str) or dependency.tag.rsplit("}", 1)[-1] != "dependency":
+                continue
+            merged[pom_dependency_key(dependency, kind)] = xml_semantic(dependency)
+
+    for _, path in candidates:
+        root = load_pom(path)
+        for child in root:
+            local_name = child.tag.rsplit("}", 1)[-1]
+            containers: list[tuple[str, ElementTree.Element]] = []
+            if local_name == "dependencies":
+                containers.append(("direct", child))
+            elif local_name == "dependencyManagement":
+                containers.extend(
+                    ("managed", managed_dependencies)
+                    for managed_dependencies in child
+                    if managed_dependencies.tag.rsplit("}", 1)[-1] == "dependencies"
+                )
+            for kind, container in containers:
+                for dependency in container:
+                    if dependency.tag.rsplit("}", 1)[-1] != "dependency":
+                        continue
+                    key = pom_dependency_key(dependency, kind)
+                    semantic = xml_semantic(dependency)
+                    previous = merged.get(key)
+                    if previous is not None and previous != semantic:
+                        raise MergeError(
+                            f"conflicting root POM dependency {':'.join(key)} in {path}"
+                        )
+                    if previous is None:
+                        ensure_container(kind).append(copy.deepcopy(dependency))
+                        merged[key] = semantic
+
+    if namespace:
+        ElementTree.register_namespace("", namespace)
+    ElementTree.register_namespace("xsi", "http://www.w3.org/2001/XMLSchema-instance")
+    ElementTree.indent(base, space="  ")
+    return ElementTree.tostring(
+        base,
+        encoding="utf-8",
+        xml_declaration=True,
+        short_empty_elements=False,
+    ) + b"\n"
 
 
 def validate_declared_payload(
@@ -1268,6 +1767,8 @@ class Assembler:
                         f"{coordinate.display()}:{name} is {actual_platform!r}, expected {platform!r}"
                     )
                 variant_copy = copy.deepcopy(variant)
+                if platform == "common":
+                    variant_copy = self.merge_common_variant(coordinate, name)
                 selected.append(variant_copy)
                 platforms[name] = platform
                 if platform == "common":
@@ -1450,7 +1951,11 @@ class Assembler:
                             f"{previous_platform} and {platform}"
                         )
                     targets[target] = platform
-                selected_by_name[name] = copy.deepcopy(variant)
+                selected_by_name[name] = (
+                    self.merge_common_variant(coordinate, name)
+                    if platform == "common"
+                    else copy.deepcopy(variant)
+                )
                 selected_platforms[name] = platform
         if not selected_by_name:
             raise MergeError(f"no owned variants found for {coordinate.display()}")
@@ -1483,6 +1988,255 @@ class Assembler:
             self.stage_target(target, platform, coordinate)
         self.assemble_fork_dependencies(merged, coordinate.display())
 
+    def merge_common_variant(self, coordinate: Coordinate, name: str) -> dict[str, Any]:
+        common_owner = self.requirements.platform_owners["common"]
+        authoritative = self.record(common_owner, coordinate)
+        base_variant = authoritative.variants.get(name)
+        if base_variant is None or variant_platform(base_variant) != "common":
+            raise MergeError(
+                f"{common_owner} input lacks common variant {coordinate.display()}:{name}"
+            )
+        candidates: list[tuple[ModuleRecord, Mapping[str, Any]]] = []
+        for owner in OWNERS:
+            record = self.indexes[owner].get(coordinate)
+            if record is None:
+                continue
+            variant = record.variants.get(name)
+            if variant is None:
+                continue
+            if variant_platform(variant) != "common":
+                raise MergeError(
+                    f"{owner} input classifies {coordinate.display()}:{name} inconsistently"
+                )
+            candidates.append((record, variant))
+
+        merged = copy.deepcopy(base_variant)
+        comparable_base = {
+            key: value
+            for key, value in base_variant.items()
+            if key not in {"files", "dependencies", "dependencyConstraints"}
+        }
+        authoritative_files: set[tuple[str, str]] | None = None
+        for record, variant in candidates:
+            comparable = {
+                key: value
+                for key, value in variant.items()
+                if key not in {"files", "dependencies", "dependencyConstraints"}
+            }
+            if comparable != comparable_base:
+                raise MergeError(
+                    f"common variant structure differs for {coordinate.display()}:{name} "
+                    f"between {common_owner} and {record.owner}"
+                )
+            raw_files = variant.get("files", [])
+            if not isinstance(raw_files, list):
+                raise MergeError(
+                    f"{coordinate.display()}:{name} from {record.owner} has invalid files array"
+                )
+            identities: set[tuple[str, str]] = set()
+            for entry in raw_files:
+                if not isinstance(entry, dict):
+                    raise MergeError(
+                        f"{coordinate.display()}:{name} from {record.owner} has invalid file entry"
+                    )
+                filename = entry.get("name")
+                url = entry.get("url")
+                if (
+                    not isinstance(filename, str)
+                    or not filename
+                    or Path(filename).name != filename
+                    or not isinstance(url, str)
+                    or not url
+                    or Path(url).name != url
+                ):
+                    raise MergeError(
+                        f"{coordinate.display()}:{name} from {record.owner} has unsafe file entry"
+                    )
+                identity = (filename, url)
+                if identity in identities:
+                    raise MergeError(
+                        f"{coordinate.display()}:{name} from {record.owner} repeats {identity!r}"
+                    )
+                identities.add(identity)
+                validate_declared_payload(
+                    record.path.parent / url,
+                    entry,
+                    f"{coordinate.display()}:{name} from {record.owner}",
+                )
+            if authoritative_files is None:
+                authoritative_files = identities
+            elif identities != authoritative_files:
+                raise MergeError(
+                    f"common variant files differ for {coordinate.display()}:{name} "
+                    f"between {common_owner} and {record.owner}"
+                )
+
+        for field in ("dependencies", "dependencyConstraints"):
+            merged_items: list[dict[str, Any]] = []
+            by_identity: dict[tuple[str, str], dict[str, Any]] = {}
+            anonymous: set[str] = set()
+            for record, variant in candidates:
+                raw_items = variant.get(field, [])
+                if not isinstance(raw_items, list):
+                    raise MergeError(
+                        f"{coordinate.display()}:{name} from {record.owner} has invalid {field}"
+                    )
+                for item in raw_items:
+                    if not isinstance(item, dict):
+                        raise MergeError(
+                            f"{coordinate.display()}:{name} from {record.owner} has invalid {field} item"
+                        )
+                    group = item.get("group")
+                    module = item.get("module")
+                    if isinstance(group, str) and isinstance(module, str):
+                        identity = (group, module)
+                        previous = by_identity.get(identity)
+                        if previous is not None and previous != item:
+                            raise MergeError(
+                                f"conflicting {field} for {coordinate.display()}:{name}: "
+                                f"{group}:{module}"
+                            )
+                        if previous is None:
+                            copied = copy.deepcopy(item)
+                            by_identity[identity] = copied
+                            merged_items.append(copied)
+                    else:
+                        encoded = json.dumps(item, sort_keys=True, separators=(",", ":"))
+                        if encoded not in anonymous:
+                            anonymous.add(encoded)
+                            merged_items.append(copy.deepcopy(item))
+            if merged_items:
+                merged[field] = merged_items
+            else:
+                merged.pop(field, None)
+        return merged
+
+    def common_payload_plans(
+        self,
+        coordinate: Coordinate,
+        merged: Mapping[str, Any],
+    ) -> dict[str, tuple[dict[str, bytes], list[dict[str, Any]]]]:
+        variants = merged.get("variants")
+        if not isinstance(variants, list):
+            raise MergeError(f"merged root {coordinate.display()} has invalid variants")
+        project_variant_owners = {
+            name.removesuffix("-published"): self.requirements.platform_owners[platform]
+            for variant in variants
+            if isinstance(variant, dict)
+            and "available-at" in variant
+            and isinstance((name := variant.get("name")), str)
+            and (platform := variant_platform(variant)) in self.requirements.platform_owners
+        }
+        plans: dict[str, tuple[dict[str, bytes], list[dict[str, Any]]]] = {}
+        plan_sources: dict[str, tuple[tuple[str, Path], ...]] = {}
+        for merged_variant in variants:
+            if not isinstance(merged_variant, dict) or variant_platform(merged_variant) != "common":
+                continue
+            name = merged_variant.get("name")
+            if not isinstance(name, str):
+                raise MergeError(f"merged root {coordinate.display()} has unnamed common variant")
+            merged_files = merged_variant.get("files", [])
+            if not isinstance(merged_files, list):
+                raise MergeError(f"merged root {coordinate.display()}:{name} has invalid files")
+            merged_by_identity = {
+                (entry.get("name"), entry.get("url")): entry
+                for entry in merged_files
+                if isinstance(entry, dict)
+            }
+            candidates: list[tuple[ModuleRecord, Mapping[str, Any]]] = []
+            for owner in OWNERS:
+                record = self.indexes[owner].get(coordinate)
+                variant = record.variants.get(name) if record is not None else None
+                if variant is not None:
+                    candidates.append((record, variant))
+            for identity, merged_entry in merged_by_identity.items():
+                filename, url = identity
+                if not isinstance(filename, str) or not isinstance(url, str):
+                    raise MergeError(f"merged root {coordinate.display()}:{name} has unsafe file")
+                sources: list[tuple[str, Path]] = []
+                for record, variant in candidates:
+                    source_entry = next(
+                        (
+                            entry
+                            for entry in variant.get("files", [])
+                            if isinstance(entry, dict)
+                            and (entry.get("name"), entry.get("url")) == identity
+                        ),
+                        None,
+                    )
+                    if source_entry is None:
+                        raise MergeError(
+                            f"{record.owner} input lacks common payload {identity!r} for "
+                            f"{coordinate.display()}:{name}"
+                        )
+                    sources.append((record.owner, record.path.parent / url))
+                if len(sources) < 2 or all(
+                    files_equivalent(sources[0][1], source[1]) for source in sources[1:]
+                ):
+                    continue
+                if Path(url).suffix.lower() not in {".jar", ".zip"}:
+                    raise MergeError(
+                        f"unequal common payload {coordinate.display()}:{name}:{url} is not an archive"
+                    )
+                source_tuple = tuple(sources)
+                previous_sources = plan_sources.get(url)
+                if previous_sources is not None and previous_sources != source_tuple:
+                    raise MergeError(
+                        f"common variants disagree about sources for {coordinate.display()}:{url}"
+                    )
+                plan_sources[url] = source_tuple
+                entries = merge_archive_payloads(
+                    source_tuple,
+                    project_variant_owners,
+                    self.requirements.platform_owners["common"],
+                )
+                existing = plans.get(url)
+                if existing is None:
+                    plans[url] = (entries, [merged_entry])
+                else:
+                    if existing[0] != entries:
+                        raise MergeError(
+                            f"common variants synthesize conflicting {coordinate.display()}:{url}"
+                        )
+                    existing[1].append(merged_entry)
+        return plans
+
+    @staticmethod
+    def update_payload_descriptor(entry: dict[str, Any], payload: Path) -> None:
+        entry["size"] = payload.stat().st_size
+        for field, algorithm in (
+            ("md5", "md5"),
+            ("sha1", "sha1"),
+            ("sha256", "sha256"),
+            ("sha512", "sha512"),
+        ):
+            entry[field] = checksum(payload, algorithm)
+
+    def root_pom_plan(self, coordinate: Coordinate) -> bytes | None:
+        pom_name = f"{coordinate.module}-{coordinate.version}.pom"
+        candidates: list[tuple[str, Path, ElementTree.Element, set[tuple[str, tuple[Any, ...]]]]] = []
+        for owner in OWNERS:
+            record = self.indexes[owner].get(coordinate)
+            if record is None:
+                continue
+            path = record.path.parent / pom_name
+            if not path.is_file():
+                raise MergeError(f"{owner} root {coordinate.display()} is missing {pom_name}")
+            root = load_pom(path)
+            candidates.append((owner, path, root, pom_dependency_semantics(root)))
+        if len(candidates) < 2 or all(
+            files_equivalent(candidates[0][1], candidate[1]) for candidate in candidates[1:]
+        ):
+            return None
+        expected_static = pom_static_semantic(candidates[0][2])
+        for owner, path, root, _ in candidates[1:]:
+            if pom_static_semantic(root) != expected_static:
+                raise MergeError(
+                    f"root POM metadata differs for {coordinate.display()} between "
+                    f"{candidates[0][0]} and {owner}: {path}"
+                )
+        return merge_pom_documents([(owner, path) for owner, path, _, _ in candidates])
+
     def stage_root(
         self,
         coordinate: Coordinate,
@@ -1497,8 +2251,24 @@ class Assembler:
         tooling = self.merge_tooling_metadata(coordinate, tooling_name, allowed_platforms)
         if tooling is not None:
             synthesized.add(tooling_name)
+        payload_plans = self.common_payload_plans(coordinate, merged)
+        synthesized.update(payload_plans)
+        pom_name = f"{coordinate.module}-{coordinate.version}.pom"
+        pom_plan = self.root_pom_plan(coordinate)
+        if pom_plan is not None:
+            synthesized.add(pom_name)
         self.copy_owned_version(record, synthesized)
         self.audit_root_collisions(coordinate, owner, synthesized)
+        for filename, (entries, descriptors) in payload_plans.items():
+            payload_dest = coordinate.version_dir(self.stage) / filename
+            write_archive_atomic(payload_dest, entries)
+            for descriptor in descriptors:
+                self.update_payload_descriptor(descriptor, payload_dest)
+            self.report.synthesized_files.append(str(payload_dest.relative_to(self.stage)))
+        if pom_plan is not None:
+            pom_dest = coordinate.version_dir(self.stage) / pom_name
+            write_bytes_atomic(pom_dest, pom_plan)
+            self.report.synthesized_files.append(str(pom_dest.relative_to(self.stage)))
         module_dest = coordinate.module_path(self.stage)
         write_json_atomic(module_dest, merged)
         self.report.synthesized_files.append(str(module_dest.relative_to(self.stage)))
@@ -1604,6 +2374,11 @@ class Assembler:
                 authoritative_variant = (
                     authoritative.variants.get(name) if authoritative is not None else None
                 )
+                if platform == "common" and authoritative_variant is not None:
+                    # Common metadata and sources are host shards. Their structure and payloads
+                    # are validated and deterministically unioned by merge_common_variant() and
+                    # common_payload_plans() when the root publication is staged.
+                    continue
                 if authoritative_variant is None or not source_variant_equivalent(
                     authoritative,
                     authoritative_variant,
@@ -1893,10 +2668,9 @@ class Assembler:
                             f"tooling target {key!r} for {coordinate.display()} has no "
                             f"{expected_owner} owner copy"
                         )
-                    if any(value != authoritative for _, _, value in entries):
-                        raise MergeError(
-                            f"conflicting Kotlin tooling target {key!r} for {coordinate.display()}"
-                        )
+                    # A non-owner host may configure the same logical target with host-local
+                    # toolchain extras even though it does not publish that target. Only the
+                    # configured platform owner is authoritative for the merged target.
                     if owner != expected_owner:
                         continue
                     if platform not in allowed_platforms:

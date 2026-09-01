@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import io
 import json
 import shutil
 import sys
@@ -106,6 +107,14 @@ def write_checksum_sidecar(path: Path, algorithm: str) -> Path:
     sidecar = path.with_name(f"{path.name}.{algorithm}")
     sidecar.write_text(digest(path.read_bytes(), algorithm) + "\n", encoding="ascii")
     return sidecar
+
+
+def archive_data(entries: dict[str, bytes]) -> bytes:
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, data in entries.items():
+            archive.writestr(name, data)
+    return output.getvalue()
 
 
 def write_pom(
@@ -935,9 +944,17 @@ class MergeMavenArtifactTest(unittest.TestCase):
                         (apple_root / "apple-only.txt").write_text("bad", encoding="utf-8")
                     else:
                         pom = apple_root / f"{MODULE}-{VERSION}.pom"
-                        pom.write_text(pom.read_text(encoding="utf-8") + "<!-- different -->\n")
+                        pom.write_text(
+                            pom.read_text(encoding="utf-8").replace(
+                                "</project>", "<description>different</description></project>"
+                            ),
+                            encoding="utf-8",
+                        )
 
-                self.assert_fixture_rejected(mutate, "unowned root file|unequal root collision")
+                self.assert_fixture_rejected(
+                    mutate,
+                    "unowned root file|unequal root collision|root POM metadata differs",
+                )
 
     def test_accepts_semantically_identical_root_jars(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -964,6 +981,149 @@ class MergeMavenArtifactTest(unittest.TestCase):
                 if module_sidecar.is_file():
                     write_checksum_sidecar(module_path, "sha256")
             MERGER.run(fixture.args(dry_run=True))
+
+    def test_unions_host_sharded_common_metadata_archives_and_pom_dependencies(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = MergerFixture(Path(temporary))
+            fixture.create()
+            payload_name = f"{MODULE}-{VERSION}.jar"
+            project_variants = {
+                "windows": [
+                    {"name": "desktopApiElements", "sourceSet": ["commonMain"]},
+                    {"name": "mingwX64ApiElements", "sourceSet": ["commonMain"]},
+                ],
+                "apple": [
+                    {
+                        "name": "macosArm64ApiElements",
+                        "sourceSet": ["appleMain", "commonMain"],
+                    }
+                ],
+                "web": [
+                    {"name": "jsApiElements", "sourceSet": ["webMain", "commonMain"]}
+                ],
+            }
+            unique_entries = {
+                "windows": {},
+                "apple": {"appleMain/default/linkdata/module": b"apple"},
+                "web": {"webMain/default/linkdata/module": b"web"},
+            }
+            common_entries = {
+                "windows": b"authoritative-common",
+                "apple": b"host-local-common",
+                "web": b"authoritative-common",
+            }
+            for owner in ("windows", "apple", "web"):
+                source_sets = [
+                    {
+                        "name": "commonMain",
+                        "dependsOn": [],
+                        "moduleDependency": ["org.jetbrains.kotlin:kotlin-stdlib"],
+                        "binaryLayout": "klib",
+                    }
+                ]
+                if owner == "apple":
+                    source_sets.insert(
+                        0,
+                        {
+                            "name": "appleMain",
+                            "dependsOn": ["commonMain"],
+                            "moduleDependency": [],
+                            "binaryLayout": "klib",
+                            "hostSpecific": "true",
+                        },
+                    )
+                elif owner == "web":
+                    source_sets.insert(
+                        0,
+                        {
+                            "name": "webMain",
+                            "dependsOn": ["commonMain"],
+                            "moduleDependency": [],
+                            "binaryLayout": "klib",
+                        },
+                    )
+                structure = json.dumps(
+                    {
+                        "projectStructure": {
+                            "formatVersion": "0.3.3",
+                            "isPublishedAsRoot": "true",
+                            "variants": project_variants[owner],
+                            "sourceSets": source_sets,
+                        }
+                    }
+                ).encode()
+                payload = archive_data(
+                    {
+                        "META-INF/MANIFEST.MF": b"Manifest-Version: 1.0\r\n\r\n",
+                        "META-INF/kotlin-project-structure-metadata.json": structure,
+                        "commonMain/default/linkdata/module": common_entries[owner],
+                        **unique_entries[owner],
+                    }
+                )
+                payload_path = version_dir(fixture.inputs[owner], MODULE) / payload_name
+                payload_path.write_bytes(payload)
+                module_path = fixture.module_path(owner)
+                module = read_json(module_path)
+                common_variant = {
+                    "name": "metadataApiElements",
+                    "attributes": attributes("common"),
+                    "files": [payload_entry(payload_name, payload)],
+                }
+                if owner == "apple":
+                    common_variant["dependencies"] = [
+                        {
+                            "group": "org.jetbrains.kotlinx",
+                            "module": "kotlinx-coroutines-core",
+                            "version": {"requires": "1.8.0"},
+                        }
+                    ]
+                if owner == "windows":
+                    module["variants"][0] = common_variant
+                else:
+                    module["variants"].append(common_variant)
+                write_json(module_path, module)
+                module_sidecar = module_path.with_name(f"{module_path.name}.sha256")
+                if module_sidecar.is_file():
+                    write_checksum_sidecar(module_path, "sha256")
+
+            report = MERGER.run(fixture.args(dry_run=False))
+            installed_dir = version_dir(fixture.destination, MODULE)
+            installed_payload = installed_dir / payload_name
+            with zipfile.ZipFile(installed_payload) as archive:
+                self.assertEqual(
+                    archive.read("commonMain/default/linkdata/module"),
+                    b"authoritative-common",
+                )
+                self.assertEqual(archive.read("appleMain/default/linkdata/module"), b"apple")
+                self.assertEqual(archive.read("webMain/default/linkdata/module"), b"web")
+                project = json.loads(
+                    archive.read("META-INF/kotlin-project-structure-metadata.json")
+                )["projectStructure"]
+            self.assertEqual(
+                {variant["name"] for variant in project["variants"]},
+                {
+                    "desktopApiElements",
+                    "mingwX64ApiElements",
+                    "macosArm64ApiElements",
+                    "jsApiElements",
+                },
+            )
+            self.assertEqual(
+                {source_set["name"] for source_set in project["sourceSets"]},
+                {"commonMain", "appleMain", "webMain"},
+            )
+            installed_module = read_json(installed_dir / f"{MODULE}-{VERSION}.module")
+            common = next(
+                variant
+                for variant in installed_module["variants"]
+                if variant["name"] == "metadataApiElements"
+            )
+            self.assertEqual(common["dependencies"][0]["module"], "kotlinx-coroutines-core")
+            self.assertEqual(common["files"][0]["sha256"], digest(installed_payload.read_bytes(), "sha256"))
+            self.assertIn(
+                str(installed_payload.relative_to(fixture.destination)),
+                report.synthesized_files,
+            )
 
     def test_accepts_semantically_identical_non_owner_leaf_copy(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1017,7 +1177,12 @@ class MergeMavenArtifactTest(unittest.TestCase):
                         )
                     elif failure == "payload":
                         pom = duplicate_dir / f"{module}-{VERSION}.pom"
-                        pom.write_text(pom.read_text(encoding="utf-8") + "<!-- different -->\n")
+                        pom.write_text(
+                            pom.read_text(encoding="utf-8").replace(
+                                "</project>", "<description>different</description></project>"
+                            ),
+                            encoding="utf-8",
+                        )
                     elif failure == "extra":
                         (duplicate_dir / "unexpected.txt").write_text("bad", encoding="utf-8")
                     else:
@@ -1046,8 +1211,20 @@ class MergeMavenArtifactTest(unittest.TestCase):
                     "tooling metadata scalars/settings differ|missing Kotlin tooling metadata",
                 )
 
-    def test_rejects_conflicting_and_duplicate_tooling_targets(self) -> None:
-        for condition in ("conflict", "duplicate", "same-platform"):
+    def test_accepts_non_owner_tooling_extras(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = MergerFixture(Path(temporary))
+            fixture.create()
+            path = fixture.tooling_path("apple")
+            value = read_json(path)
+            target = tooling_target("common")
+            target["unexpectedHostLocalExtra"] = True
+            value["projectTargets"].append(target)
+            write_json(path, value)
+            MERGER.run(fixture.args(dry_run=True))
+
+    def test_rejects_duplicate_tooling_targets(self) -> None:
+        for condition in ("duplicate", "same-platform"):
             with self.subTest(condition=condition):
                 def mutate(fixture: MergerFixture, failure: str = condition) -> None:
                     path = fixture.tooling_path("apple")
@@ -1058,17 +1235,13 @@ class MergeMavenArtifactTest(unittest.TestCase):
                         target = tooling_target("js")
                         target["target"] = "example.SecondKotlinJsTarget"
                     else:
-                        target = tooling_target(
-                            "macosArm64" if failure == "duplicate" else "common"
-                        )
-                    if failure == "conflict":
-                        target["unexpected"] = True
+                        target = tooling_target("macosArm64")
                     value["projectTargets"].append(target)
                     write_json(path, value)
 
                 self.assert_fixture_rejected(
                     mutate,
-                    "conflicting Kotlin tooling target|repeats Kotlin tooling target|repeats platform",
+                    "repeats Kotlin tooling target|repeats platform",
                 )
 
     def test_rejects_pom_coordinate_and_dependency_mismatches(self) -> None:
