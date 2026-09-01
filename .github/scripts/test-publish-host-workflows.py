@@ -153,10 +153,29 @@ class PublishHostWorkflowsTest(unittest.TestCase):
             "skiko/skiko/skiko-skottie/build/publications/kotlinMultiplatform/module.json",
             web,
         )
+        linux_verification = web.split(
+            "- name: Merge and verify skiko Linux module metadata",
+            1,
+        )[1].split("# -mac,-windows", 1)[0]
+        skiko_linux_check = linux_verification.split(
+            "--coordinate io.github.archivesteak.skiko:skiko:0.151.0-alpha04-mingw",
+            1,
+        )[1].split(
+            "python3 release-contract/.github/scripts/verify-maven-kmp-publications.py",
+            1,
+        )[0]
+        skottie_linux_check = linux_verification.split(
+            "--coordinate io.github.archivesteak.skiko:skiko-skottie:0.151.0-alpha04-mingw",
+            1,
+        )[1]
         for target in ("linuxX64", "linuxArm64"):
             self.assertIn(
                 f"--require-klib-linker-option {target}=-lfontconfig",
-                web,
+                skiko_linux_check,
+            )
+            self.assertNotIn(
+                f"--require-klib-linker-option {target}=-lfontconfig",
+                skottie_linux_check,
             )
         for owner, text in texts.items():
             with self.subTest(owner=owner, artifact="skiko-skottie"):
