@@ -1,0 +1,337 @@
+{
+  "schemaVersion": 2,
+  "groupPrefix": "io.github.archivesteak",
+  "note": "Variant names reflect Kotlin/Gradle publication metadata expected from the current forks. Compose core modules use 1.12.0-beta02-mingw; Material3 is independently versioned at 1.12.0-alpha03-mingw. Adjust this checked-in allowlist deliberately if final producer metadata uses different names; never weaken it to a prefix-only check.",
+  "platformOwners": {
+    "common": "windows",
+    "jvm": "windows",
+    "jvmWindowsX64": "windows",
+    "jvmMacosX64": "apple",
+    "jvmMacosArm64": "apple",
+    "jvmLinuxX64": "web",
+    "mingwX64": "windows",
+    "macosX64": "apple",
+    "macosArm64": "apple",
+    "iosX64": "apple",
+    "iosArm64": "apple",
+    "iosSimulatorArm64": "apple",
+    "tvosX64": "apple",
+    "tvosArm64": "apple",
+    "tvosSimulatorArm64": "apple",
+    "watchosX64": "apple",
+    "watchosArm32": "apple",
+    "watchosArm64": "apple",
+    "watchosDeviceArm64": "apple",
+    "watchosSimulatorArm64": "apple",
+    "js": "web",
+    "wasmJs": "web",
+    "android": "web",
+    "linuxX64": "web",
+    "linuxArm64": "web"
+  },
+  "sourceProvenance": {
+    "windows": {
+      "compose": "2f6ffd997c798e063f1a717521673d5f4e2365c6",
+      "skia": "343b3b3b03072992df41ef46c3d8e78ef7a5792e",
+      "skiko": "73e4b5ef52f42728787d060007774166962cc668"
+    },
+    "apple": {
+      "compose": "2f6ffd997c798e063f1a717521673d5f4e2365c6",
+      "skiko": "73e4b5ef52f42728787d060007774166962cc668"
+    },
+    "web": {
+      "compose": "2f6ffd997c798e063f1a717521673d5f4e2365c6",
+      "skiko": "73e4b5ef52f42728787d060007774166962cc668"
+    }
+  },
+  "pomOnlyModules": [
+    {
+      "coordinate": "io.github.archivesteak.compose.desktop:desktop-jvm-windows-x64:1.12.0-beta02-mingw",
+      "owner": "windows"
+    },
+    {
+      "coordinate": "io.github.archivesteak.skiko:skiko-awt-runtime-windows-x64:0.151.0-alpha04-mingw",
+      "owner": "windows"
+    },
+    {
+      "coordinate": "io.github.archivesteak.skiko:skiko-awt-runtime-macos-x64:0.151.0-alpha04-mingw",
+      "owner": "apple"
+    },
+    {
+      "coordinate": "io.github.archivesteak.skiko:skiko-awt-runtime-macos-arm64:0.151.0-alpha04-mingw",
+      "owner": "apple"
+    },
+    {
+      "coordinate": "io.github.archivesteak.skiko:skiko-awt-runtime-linux-x64:0.151.0-alpha04-mingw",
+      "owner": "web"
+    }
+  ],
+  "modules": [
+    {
+      "coordinate": "io.github.archivesteak.skiko:skiko:0.151.0-alpha04-mingw",
+      "requiredVariants": {
+        "common": [
+          "metadataApiElements",
+          "metadataSourcesElements"
+        ],
+        "jvm": [
+          "awtApiElements-published",
+          "awtRuntimeElements-published",
+          "awtSourcesElements-published"
+        ],
+        "mingwX64": [
+          "mingwX64ApiElements-published",
+          "mingwX64SourcesElements-published"
+        ],
+        "macosX64": [
+          "macosX64ApiElements-published",
+          "macosX64SourcesElements-published",
+          "macosX64MetadataElements-published"
+        ],
+        "macosArm64": [
+          "macosArm64ApiElements-published",
+          "macosArm64SourcesElements-published",
+          "macosArm64MetadataElements-published"
+        ],
+        "iosArm64": [
+          "iosArm64ApiElements-published",
+          "iosArm64SourcesElements-published",
+          "iosArm64MetadataElements-published"
+        ],
+        "iosSimulatorArm64": [
+          "iosSimulatorArm64ApiElements-published",
+          "iosSimulatorArm64SourcesElements-published",
+          "iosSimulatorArm64MetadataElements-published"
+        ],
+        "js": [
+          "jsApiElements-published",
+          "jsRuntimeElements-published",
+          "jsSourcesElements-published",
+          "skikoWasmRuntimeElementsForJs"
+        ],
+        "wasmJs": [
+          "wasmJsApiElements-published",
+          "wasmJsRuntimeElements-published",
+          "wasmJsSourcesElements-published",
+          "skikoWasmRuntimeElementsForWasmJs"
+        ],
+        "android": [
+          "androidApiElements-published",
+          "androidRuntimeElements-published",
+          "androidSourcesElements-published"
+        ],
+        "linuxX64": [
+          "linuxX64ApiElements-published",
+          "linuxX64SourcesElements-published"
+        ],
+        "linuxArm64": [
+          "linuxArm64ApiElements-published",
+          "linuxArm64SourcesElements-published"
+        ]
+      },
+      "targetModules": {
+        "jvm": "skiko-awt",
+        "mingwX64": "skiko-mingwx64",
+        "macosX64": "skiko-macosx64",
+        "macosArm64": "skiko-macosarm64",
+        "iosArm64": "skiko-iosarm64",
+        "iosSimulatorArm64": "skiko-iossimulatorarm64",
+        "js": "skiko-js",
+        "wasmJs": "skiko-wasm-js",
+        "android": "skiko-android",
+        "linuxX64": "skiko-linuxx64",
+        "linuxArm64": "skiko-linuxarm64"
+      }
+    },
+    {
+      "coordinate": "io.github.archivesteak.compose.runtime:runtime:1.12.0-beta02-mingw",
+      "requiredVariants": {
+        "common": ["metadataApiElements", "metadataSourcesElements"],
+        "jvm": ["desktopApiElements-published", "desktopRuntimeElements-published", "desktopSourcesElements-published"],
+        "mingwX64": ["mingwX64ApiElements-published", "mingwX64SourcesElements-published"],
+        "macosArm64": ["macosArm64ApiElements-published", "macosArm64SourcesElements-published", "macosArm64MetadataElements-published"],
+        "iosArm64": ["iosArm64ApiElements-published", "iosArm64SourcesElements-published", "iosArm64MetadataElements-published"],
+        "iosSimulatorArm64": ["iosSimulatorArm64ApiElements-published", "iosSimulatorArm64SourcesElements-published", "iosSimulatorArm64MetadataElements-published"],
+        "js": ["jsApiElements-published", "jsRuntimeElements-published", "jsSourcesElements-published"],
+        "wasmJs": ["wasmJsApiElements-published", "wasmJsRuntimeElements-published", "wasmJsSourcesElements-published"],
+        "android": ["androidApiElements-published", "androidRuntimeElements-published", "androidSourcesElements-published"]
+      },
+      "targetModules": {
+        "jvm": "runtime-desktop",
+        "mingwX64": "runtime-mingwx64",
+        "macosArm64": "runtime-macosarm64",
+        "iosArm64": "runtime-iosarm64",
+        "iosSimulatorArm64": "runtime-iossimulatorarm64",
+        "js": "runtime-js",
+        "wasmJs": "runtime-wasm-js",
+        "android": "runtime-android"
+      }
+    },
+    {
+      "coordinate": "io.github.archivesteak.compose.desktop:desktop:1.12.0-beta02-mingw",
+      "requiredVariants": {
+        "common": ["metadataApiElements", "metadataSourcesElements"],
+        "jvm": ["jvmApiElements-published", "jvmRuntimeElements-published", "jvmSourcesElements-published"]
+      },
+      "targetModules": {
+        "jvm": "desktop-jvm"
+      }
+    },
+    {
+      "coordinate": "io.github.archivesteak.compose.ui:ui:1.12.0-beta02-mingw",
+      "requiredVariants": {
+        "common": ["metadataApiElements", "metadataSourcesElements"],
+        "jvm": ["desktopApiElements-published", "desktopRuntimeElements-published", "desktopSourcesElements-published"],
+        "mingwX64": ["mingwX64ApiElements-published", "mingwX64SourcesElements-published"],
+        "macosArm64": ["macosArm64ApiElements-published", "macosArm64SourcesElements-published", "macosArm64MetadataElements-published"],
+        "iosArm64": ["iosArm64ApiElements-published", "iosArm64SourcesElements-published", "iosArm64MetadataElements-published"],
+        "iosSimulatorArm64": ["iosSimulatorArm64ApiElements-published", "iosSimulatorArm64SourcesElements-published", "iosSimulatorArm64MetadataElements-published"],
+        "js": ["jsApiElements-published", "jsRuntimeElements-published", "jsSourcesElements-published"],
+        "wasmJs": ["wasmJsApiElements-published", "wasmJsRuntimeElements-published", "wasmJsSourcesElements-published"],
+        "android": ["androidApiElements-published", "androidRuntimeElements-published", "androidSourcesElements-published"]
+      },
+      "targetModules": {
+        "jvm": "ui-desktop",
+        "mingwX64": "ui-mingwx64",
+        "macosArm64": "ui-macosarm64",
+        "iosArm64": "ui-iosarm64",
+        "iosSimulatorArm64": "ui-iossimulatorarm64",
+        "js": "ui-js",
+        "wasmJs": "ui-wasm-js",
+        "android": "ui-android"
+      }
+    },
+    {
+      "coordinate": "io.github.archivesteak.compose.ui:ui-test:1.12.0-beta02-mingw",
+      "requiredVariants": {
+        "common": ["metadataApiElements", "metadataSourcesElements"],
+        "jvm": ["desktopApiElements-published", "desktopRuntimeElements-published", "desktopSourcesElements-published"],
+        "mingwX64": ["mingwX64ApiElements-published", "mingwX64SourcesElements-published"],
+        "macosArm64": ["macosArm64ApiElements-published", "macosArm64SourcesElements-published", "macosArm64MetadataElements-published"],
+        "iosArm64": ["iosArm64ApiElements-published", "iosArm64SourcesElements-published", "iosArm64MetadataElements-published"],
+        "iosSimulatorArm64": ["iosSimulatorArm64ApiElements-published", "iosSimulatorArm64SourcesElements-published", "iosSimulatorArm64MetadataElements-published"],
+        "js": ["jsApiElements-published", "jsRuntimeElements-published", "jsSourcesElements-published"],
+        "wasmJs": ["wasmJsApiElements-published", "wasmJsRuntimeElements-published", "wasmJsSourcesElements-published"],
+        "android": ["androidApiElements-published", "androidRuntimeElements-published", "androidSourcesElements-published"]
+      },
+      "targetModules": {
+        "jvm": "ui-test-desktop",
+        "mingwX64": "ui-test-mingwx64",
+        "macosArm64": "ui-test-macosarm64",
+        "iosArm64": "ui-test-iosarm64",
+        "iosSimulatorArm64": "ui-test-iossimulatorarm64",
+        "js": "ui-test-js",
+        "wasmJs": "ui-test-wasm-js",
+        "android": "ui-test-android"
+      }
+    },
+    {
+      "coordinate": "io.github.archivesteak.compose.ui:ui-uikit:1.12.0-beta02-mingw",
+      "requiredVariants": {
+        "common": ["metadataApiElements", "metadataSourcesElements"],
+        "iosArm64": ["iosArm64ApiElements-published", "iosArm64SourcesElements-published", "iosArm64MetadataElements-published"],
+        "iosSimulatorArm64": ["iosSimulatorArm64ApiElements-published", "iosSimulatorArm64SourcesElements-published", "iosSimulatorArm64MetadataElements-published"]
+      },
+      "targetModules": {
+        "iosArm64": "ui-uikit-iosarm64",
+        "iosSimulatorArm64": "ui-uikit-iossimulatorarm64"
+      }
+    },
+    {
+      "coordinate": "io.github.archivesteak.androidx.navigationevent:navigationevent-compose:1.1.1-beta01-mingw",
+      "requiredVariants": {
+        "common": ["metadataApiElements", "metadataSourcesElements"],
+        "jvm": ["desktopApiElements-published", "desktopRuntimeElements-published", "desktopSourcesElements-published"],
+        "mingwX64": ["mingwX64ApiElements-published", "mingwX64SourcesElements-published"],
+        "macosArm64": ["macosArm64ApiElements-published", "macosArm64SourcesElements-published", "macosArm64MetadataElements-published"],
+        "iosArm64": ["iosArm64ApiElements-published", "iosArm64SourcesElements-published", "iosArm64MetadataElements-published"],
+        "iosSimulatorArm64": ["iosSimulatorArm64ApiElements-published", "iosSimulatorArm64SourcesElements-published", "iosSimulatorArm64MetadataElements-published"],
+        "js": ["jsApiElements-published", "jsRuntimeElements-published", "jsSourcesElements-published"],
+        "wasmJs": ["wasmJsApiElements-published", "wasmJsRuntimeElements-published", "wasmJsSourcesElements-published"],
+        "android": ["androidApiElements-published", "androidRuntimeElements-published", "androidSourcesElements-published"]
+      },
+      "targetModules": {
+        "jvm": "navigationevent-compose-desktop",
+        "mingwX64": "navigationevent-compose-mingwx64",
+        "macosArm64": "navigationevent-compose-macosarm64",
+        "iosArm64": "navigationevent-compose-iosarm64",
+        "iosSimulatorArm64": "navigationevent-compose-iossimulatorarm64",
+        "js": "navigationevent-compose-js",
+        "wasmJs": "navigationevent-compose-wasm-js",
+        "android": "navigationevent-compose-android"
+      }
+    },
+    {
+      "coordinate": "io.github.archivesteak.compose.foundation:foundation:1.12.0-beta02-mingw",
+      "requiredVariants": {
+        "common": ["metadataApiElements", "metadataSourcesElements"],
+        "jvm": ["desktopApiElements-published", "desktopRuntimeElements-published", "desktopSourcesElements-published"],
+        "mingwX64": ["mingwX64ApiElements-published", "mingwX64SourcesElements-published"],
+        "macosArm64": ["macosArm64ApiElements-published", "macosArm64SourcesElements-published", "macosArm64MetadataElements-published"],
+        "iosArm64": ["iosArm64ApiElements-published", "iosArm64SourcesElements-published", "iosArm64MetadataElements-published"],
+        "iosSimulatorArm64": ["iosSimulatorArm64ApiElements-published", "iosSimulatorArm64SourcesElements-published", "iosSimulatorArm64MetadataElements-published"],
+        "js": ["jsApiElements-published", "jsRuntimeElements-published", "jsSourcesElements-published"],
+        "wasmJs": ["wasmJsApiElements-published", "wasmJsRuntimeElements-published", "wasmJsSourcesElements-published"],
+        "android": ["androidApiElements-published", "androidRuntimeElements-published", "androidSourcesElements-published"]
+      },
+      "targetModules": {
+        "jvm": "foundation-desktop",
+        "mingwX64": "foundation-mingwx64",
+        "macosArm64": "foundation-macosarm64",
+        "iosArm64": "foundation-iosarm64",
+        "iosSimulatorArm64": "foundation-iossimulatorarm64",
+        "js": "foundation-js",
+        "wasmJs": "foundation-wasm-js",
+        "android": "foundation-android"
+      }
+    },
+    {
+      "coordinate": "io.github.archivesteak.compose.animation:animation:1.12.0-beta02-mingw",
+      "requiredVariants": {
+        "common": ["metadataApiElements", "metadataSourcesElements"],
+        "jvm": ["desktopApiElements-published", "desktopRuntimeElements-published", "desktopSourcesElements-published"],
+        "mingwX64": ["mingwX64ApiElements-published", "mingwX64SourcesElements-published"],
+        "macosArm64": ["macosArm64ApiElements-published", "macosArm64SourcesElements-published", "macosArm64MetadataElements-published"],
+        "iosArm64": ["iosArm64ApiElements-published", "iosArm64SourcesElements-published", "iosArm64MetadataElements-published"],
+        "iosSimulatorArm64": ["iosSimulatorArm64ApiElements-published", "iosSimulatorArm64SourcesElements-published", "iosSimulatorArm64MetadataElements-published"],
+        "js": ["jsApiElements-published", "jsRuntimeElements-published", "jsSourcesElements-published"],
+        "wasmJs": ["wasmJsApiElements-published", "wasmJsRuntimeElements-published", "wasmJsSourcesElements-published"],
+        "android": ["androidApiElements-published", "androidRuntimeElements-published", "androidSourcesElements-published"]
+      },
+      "targetModules": {
+        "jvm": "animation-desktop",
+        "mingwX64": "animation-mingwx64",
+        "macosArm64": "animation-macosarm64",
+        "iosArm64": "animation-iosarm64",
+        "iosSimulatorArm64": "animation-iossimulatorarm64",
+        "js": "animation-js",
+        "wasmJs": "animation-wasm-js",
+        "android": "animation-android"
+      }
+    },
+    {
+      "coordinate": "io.github.archivesteak.compose.material3:material3:1.12.0-alpha03-mingw",
+      "requiredVariants": {
+        "common": ["metadataApiElements", "metadataSourcesElements"],
+        "jvm": ["desktopApiElements-published", "desktopRuntimeElements-published", "desktopSourcesElements-published"],
+        "mingwX64": ["mingwX64ApiElements-published", "mingwX64SourcesElements-published"],
+        "macosArm64": ["macosArm64ApiElements-published", "macosArm64SourcesElements-published", "macosArm64MetadataElements-published"],
+        "iosArm64": ["iosArm64ApiElements-published", "iosArm64SourcesElements-published", "iosArm64MetadataElements-published"],
+        "iosSimulatorArm64": ["iosSimulatorArm64ApiElements-published", "iosSimulatorArm64SourcesElements-published", "iosSimulatorArm64MetadataElements-published"],
+        "js": ["jsApiElements-published", "jsRuntimeElements-published", "jsSourcesElements-published"],
+        "wasmJs": ["wasmJsApiElements-published", "wasmJsRuntimeElements-published", "wasmJsSourcesElements-published"],
+        "android": ["androidApiElements-published", "androidRuntimeElements-published", "androidSourcesElements-published"]
+      },
+      "targetModules": {
+        "jvm": "material3-desktop",
+        "mingwX64": "material3-mingwx64",
+        "macosArm64": "material3-macosarm64",
+        "iosArm64": "material3-iosarm64",
+        "iosSimulatorArm64": "material3-iossimulatorarm64",
+        "js": "material3-js",
+        "wasmJs": "material3-wasm-js",
+        "android": "material3-android"
+      }
+    }
+  ]
+}
