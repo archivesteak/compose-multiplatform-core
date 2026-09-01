@@ -60,6 +60,13 @@ jobs:
           path: compose-multiplatform-core
           persist-credentials: false
 
+      - name: Check out the exact release contract
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: release-contract
+          persist-credentials: false
+
       - name: Check out the Skiko fork
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -97,6 +104,7 @@ jobs:
         run: |
           for declaration in \
             "compose-multiplatform-core=$COMPOSE_REF" \
+            "release-contract=$GITHUB_SHA" \
             "skia=$SKIA_REF" \
             "skiko=$SKIKO_REF"; do
             checkout=${declaration%%=*}
@@ -129,7 +137,7 @@ jobs:
         shell: bash
         run: |
           export PATH="$PWD/toolchains/mingw64/bin:$PATH"
-          bash compose-multiplatform-core/.github/scripts/build-skia-mingw.sh skia
+          bash release-contract/.github/scripts/build-skia-mingw.sh skia
 
       - name: Publish Skiko for desktop JVM and mingwX64
         shell: pwsh
@@ -140,12 +148,12 @@ jobs:
           try {
             .\gradlew.bat --no-daemon --stacktrace `
               "-Dmaven.repo.local=$repository" `
-              -Pdeploy.release=true `
-              -Pskiko.native.enabled=false `
-              -Pskiko.native.mingw.enabled=true `
-              -Pskiko.awt.enabled=true `
-              -Pskiko.wasm.enabled=false `
-              -Pskiko.android.enabled=false `
+              "-Pdeploy.release=true" `
+              "-Pskiko.native.enabled=false" `
+              "-Pskiko.native.mingw.enabled=true" `
+              "-Pskiko.awt.enabled=true" `
+              "-Pskiko.wasm.enabled=false" `
+              "-Pskiko.android.enabled=false" `
               "-Pskia.dir=$skia" `
               :publishToMavenLocal `
               :skiko-skottie:publishToMavenLocal
@@ -157,14 +165,14 @@ jobs:
       - name: Verify Skiko Windows publications
         shell: pwsh
         run: |
-          python compose-multiplatform-core/.github/scripts/verify-maven-kmp-publications.py `
+          python release-contract/.github/scripts/verify-maven-kmp-publications.py `
             $env:MAVEN_REPOSITORY `
             --coordinate io.github.archivesteak.skiko:skiko:0.151.0-alpha04-mingw `
             --target awt=.jar `
             --target mingwX64=.klib
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          python compose-multiplatform-core/.github/scripts/verify-maven-kmp-publications.py `
+          python release-contract/.github/scripts/verify-maven-kmp-publications.py `
             $env:MAVEN_REPOSITORY `
             --coordinate io.github.archivesteak.skiko:skiko-skottie:0.151.0-alpha04-mingw `
             --target awt=.jar `
@@ -213,7 +221,7 @@ jobs:
           )
           Remove-Item -LiteralPath $excludedFatRuntimes -Recurse -Force -ErrorAction SilentlyContinue
 
-          python compose-multiplatform-core/.github/scripts/write-provenance.py `
+          python release-contract/.github/scripts/write-provenance.py `
             --owner windows `
             --output (Join-Path $staging 'provenance/windows.json') `
             --source "compose=$env:COMPOSE_REF" `
@@ -221,7 +229,7 @@ jobs:
             --source "skiko=$env:SKIKO_REF"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          python compose-multiplatform-core/.github/scripts/prune-missing-kmp-redirects.py `
+          python release-contract/.github/scripts/prune-missing-kmp-redirects.py `
             $staging `
             --close-group-prefix io.github.archivesteak
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -262,7 +270,7 @@ jobs:
         shell: pwsh
         run: |
           $repository = Join-Path $env:GITHUB_WORKSPACE 'staging\repository'
-          python compose-multiplatform-core/.github/scripts/verify-maven-kmp-publications.py `
+          python release-contract/.github/scripts/verify-maven-kmp-publications.py `
             $repository `
             --coordinate io.github.archivesteak.compose.material3:material3:1.12.0-alpha03-mingw `
             --coordinate io.github.archivesteak.compose.foundation:foundation:1.12.0-beta02-mingw `
@@ -274,13 +282,13 @@ jobs:
             --target mingwX64=.klib
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          python compose-multiplatform-core/.github/scripts/verify-maven-kmp-publications.py `
+          python release-contract/.github/scripts/verify-maven-kmp-publications.py `
             $repository `
             --coordinate io.github.archivesteak.compose.desktop:desktop:1.12.0-beta02-mingw `
             --target jvm=.jar
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          python compose-multiplatform-core/.github/scripts/verify-maven-dependency-closure.py `
+          python release-contract/.github/scripts/verify-maven-dependency-closure.py `
             $repository `
             --coordinate io.github.archivesteak.androidx.navigationevent:navigationevent-compose:1.1.1-beta01-mingw `
             --require-dependency io.github.archivesteak.compose.runtime:runtime:1.12.0-beta02-mingw `
@@ -288,14 +296,14 @@ jobs:
             --forbid-dependency-group-prefix org.jetbrains.compose
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          python compose-multiplatform-core/.github/scripts/verify-upstream-navigationevent.py
+          python release-contract/.github/scripts/verify-upstream-navigationevent.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify staged publication requirements
         shell: pwsh
         run: |
           $repository = Join-Path $env:GITHUB_WORKSPACE 'staging\repository'
-          python compose-multiplatform-core/.github/scripts/verify-central-publications.py $repository
+          python release-contract/.github/scripts/verify-central-publications.py $repository
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

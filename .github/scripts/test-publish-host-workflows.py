@@ -56,6 +56,36 @@ class PublishHostWorkflowsTest(unittest.TestCase):
             all("publishComposeJbToMavenLocal" not in text for text in texts.values())
         )
 
+    def test_validation_tools_come_from_the_exact_workflow_contract(self) -> None:
+        for owner, text in self.texts().items():
+            with self.subTest(owner=owner):
+                self.assertIn("path: release-contract", text)
+                self.assertIn("ref: ${{ github.sha }}", text)
+                self.assertTrue(
+                    "git -C release-contract rev-parse HEAD" in text
+                    or '"release-contract=$GITHUB_SHA"' in text
+                )
+                self.assertIn("release-contract/.github/scripts/", text)
+                self.assertNotIn(
+                    "compose-multiplatform-core/.github/scripts/",
+                    text,
+                )
+
+    def test_windows_quotes_gradle_project_properties_for_powershell(self) -> None:
+        windows = self.texts()["windows"]
+        publish = windows.split(
+            "- name: Publish Skiko for desktop JVM and mingwX64", 1
+        )[1].split("- name: Verify Skiko Windows publications", 1)[0]
+        for argument in (
+            "deploy.release=true",
+            "skiko.native.enabled=false",
+            "skiko.native.mingw.enabled=true",
+            "skiko.awt.enabled=true",
+            "skiko.wasm.enabled=false",
+            "skiko.android.enabled=false",
+        ):
+            self.assertIn(f'"-P{argument}"', publish)
+
     def test_skiko_scope_and_linux_common_metadata_fix_are_explicit(self) -> None:
         texts = self.texts()
         for owner in ("apple", "windows"):

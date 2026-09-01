@@ -61,6 +61,13 @@ jobs:
           path: compose-multiplatform-core
           persist-credentials: false
 
+      - name: Check out the exact release contract
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: release-contract
+          persist-credentials: false
+
       - name: Verify the checked-out Compose revision
         env:
           COMPOSE_REF: ${{ inputs.compose_ref }}
@@ -68,6 +75,11 @@ jobs:
           resolved=$(git -C compose-multiplatform-core rev-parse HEAD)
           if [ "$resolved" != "$COMPOSE_REF" ]; then
             echo "Compose checkout resolved to $resolved, expected $COMPOSE_REF"
+            exit 1
+          fi
+          contract=$(git -C release-contract rev-parse HEAD)
+          if [ "$contract" != "$GITHUB_SHA" ]; then
+            echo "Release contract resolved to $contract, expected $GITHUB_SHA"
             exit 1
           fi
 
@@ -144,7 +156,7 @@ jobs:
 
       - name: Verify skiko web and Android publications
         run: |
-          python3 compose-multiplatform-core/.github/scripts/verify-maven-kmp-publications.py \
+          python3 release-contract/.github/scripts/verify-maven-kmp-publications.py \
             "$MAVEN_REPOSITORY" \
             --coordinate io.github.archivesteak.skiko:skiko:0.151.0-alpha04-mingw \
             --coordinate io.github.archivesteak.skiko:skiko-skottie:0.151.0-alpha04-mingw \
@@ -261,7 +273,7 @@ jobs:
       # JS/Wasm/AWT root descriptor, keeping the latter's overlapping metadata variants intact.
       - name: Merge and verify skiko Linux module metadata
         run: |
-          python3 compose-multiplatform-core/.github/scripts/merge-gradle-module-metadata.py \
+          python3 release-contract/.github/scripts/merge-gradle-module-metadata.py \
             skiko/skiko/build/publications/kotlinMultiplatform/module.json \
             "$MAVEN_REPOSITORY" \
             --source-tooling-metadata skiko/skiko/build/kotlinToolingMetadata/kotlin-tooling-metadata.json \
@@ -274,7 +286,7 @@ jobs:
             --include-konan-target linux_x64 \
             --include-konan-target linux_arm64
 
-          python3 compose-multiplatform-core/.github/scripts/merge-gradle-module-metadata.py \
+          python3 release-contract/.github/scripts/merge-gradle-module-metadata.py \
             skiko/skiko/skiko-skottie/build/publications/kotlinMultiplatform/module.json \
             "$MAVEN_REPOSITORY" \
             --source-tooling-metadata skiko/skiko/skiko-skottie/build/kotlinToolingMetadata/kotlin-tooling-metadata.json \
@@ -366,7 +378,7 @@ jobs:
               print(f"verified {variant_name}: {klibs[0]} ({klibs[0].stat().st_size} bytes)")
           PY
 
-          python3 compose-multiplatform-core/.github/scripts/verify-maven-kmp-publications.py \
+          python3 release-contract/.github/scripts/verify-maven-kmp-publications.py \
             "$MAVEN_REPOSITORY" \
             --coordinate io.github.archivesteak.skiko:skiko:0.151.0-alpha04-mingw \
             --coordinate io.github.archivesteak.skiko:skiko-skottie:0.151.0-alpha04-mingw \
@@ -413,7 +425,7 @@ jobs:
       - name: Collect the published artifacts
         run: |
           mkdir -p staging/repository/io/github/archivesteak
-          python3 compose-multiplatform-core/.github/scripts/write-provenance.py \
+          python3 release-contract/.github/scripts/write-provenance.py \
             --owner web \
             --output staging/repository/provenance/web.json \
             --source "compose=$(git -C compose-multiplatform-core rev-parse HEAD)" \
@@ -428,7 +440,7 @@ jobs:
             staging/repository/io/github/archivesteak/
           # Normalize the configured-all/published-subset Gradle descriptors before verification;
           # every redirect and direct fork dependency left must exist in this producer shard.
-          python3 compose-multiplatform-core/.github/scripts/prune-missing-kmp-redirects.py \
+          python3 release-contract/.github/scripts/prune-missing-kmp-redirects.py \
             staging/repository \
             --close-group-prefix io.github.archivesteak
           unexpected=$(
@@ -464,7 +476,7 @@ jobs:
 
       - name: Verify collected Compose web and Android publications
         run: |
-          python3 compose-multiplatform-core/.github/scripts/verify-maven-kmp-publications.py \
+          python3 release-contract/.github/scripts/verify-maven-kmp-publications.py \
             staging/repository \
             --coordinate io.github.archivesteak.compose.material3:material3:1.12.0-alpha03-mingw \
             --coordinate io.github.archivesteak.compose.foundation:foundation:1.12.0-beta02-mingw \
@@ -477,14 +489,14 @@ jobs:
             --target wasmJs=.klib \
             --forbid-root-variant-prefix mingwX64
 
-          python3 compose-multiplatform-core/.github/scripts/verify-maven-dependency-closure.py \
+          python3 release-contract/.github/scripts/verify-maven-dependency-closure.py \
             staging/repository \
             --coordinate io.github.archivesteak.androidx.navigationevent:navigationevent-compose:1.1.1-beta01-mingw \
             --require-dependency io.github.archivesteak.compose.runtime:runtime:1.12.0-beta02-mingw \
             --require-dependency androidx.navigationevent:navigationevent:1.1.1 \
             --forbid-dependency-group-prefix org.jetbrains.compose
 
-          python3 compose-multiplatform-core/.github/scripts/verify-upstream-navigationevent.py
+          python3 release-contract/.github/scripts/verify-upstream-navigationevent.py
 
       - name: Fail if nothing was produced
         run: |
@@ -496,7 +508,7 @@ jobs:
 
       - name: Verify staged publication requirements
         run: |
-          python3 compose-multiplatform-core/.github/scripts/verify-central-publications.py \
+          python3 release-contract/.github/scripts/verify-central-publications.py \
             staging/repository
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
