@@ -269,6 +269,13 @@ jobs:
           python compose-multiplatform-core/.github/scripts/verify-upstream-navigationevent.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Verify staged publication requirements
+        shell: pwsh
+        run: |
+          $repository = Join-Path $env:GITHUB_WORKSPACE 'staging\repository'
+          python compose-multiplatform-core/.github/scripts/verify-central-publications.py $repository
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: maven-windows

@@ -169,6 +169,13 @@ private fun Project.configureComponentPublishing(
         }
     }
 
+    configureReadmeJavadocArtifacts(
+        extensions
+            .getByType(PublishingExtension::class.java)
+            .publications
+            .withType(MavenPublication::class.java)
+    )
+
     project.tasks.withType(GenerateModuleMetadata::class.java).configureEach { task ->
 //        val capabilitiesToRemove = publishedRedirectionCapabilities() // TODO CMP-10368 fix old capability mechanism after migration to new artifact redirection
         task.doLast {
@@ -221,6 +228,7 @@ private fun Project.configureComponentPublishing(
         }
     }
 }
+
 /**
  * Build a `fork-coordinate -> androidx-coordinate` map used to rewrite published POM dependencies
  * (see [modifyPomDependencies]). The fork publishes under `org.jetbrains.*` group ids that redirect
@@ -567,8 +575,16 @@ private fun removePreviouslyUploadedArchives(projectArchiveDir: File) {
 
 private fun Project.addInformativeMetadata(extension: AndroidXExtension, pom: MavenPom) {
     pom.name.set(extension.name)
-    pom.description.set(extension.description)
-    pom.url.set("https://github.com/JetBrains/compose-multiplatform")
+    pom.description.set(
+        provider {
+            effectiveMavenDescription(
+                extension.description.orNull,
+                extension.name.orNull,
+                project.name,
+            )
+        }
+    )
+    pom.url.set(FORK_PROJECT_URL)
     pom.inceptionYear.set(extension.inceptionYear)
     pom.licenses { licenses ->
         licenses.license { license ->
@@ -585,12 +601,15 @@ private fun Project.addInformativeMetadata(extension: AndroidXExtension, pom: Ma
         }
     }
     pom.scm { scm ->
-        scm.url.set("https://cs.android.com/androidx/platform/frameworks/support")
-        scm.connection.set(ANDROID_GIT_URL)
+        scm.url.set(FORK_PROJECT_URL)
+        scm.connection.set(FORK_SCM_CONNECTION)
+        scm.developerConnection.set(FORK_SCM_DEVELOPER_CONNECTION)
     }
     pom.developers { devs ->
         devs.developer { dev ->
-            dev.name.set("The Android Open Source Project")
+            dev.id.set(FORK_DEVELOPER_ID)
+            dev.name.set(FORK_DEVELOPER_NAME)
+            dev.url.set(FORK_DEVELOPER_URL)
         }
     }
 }
@@ -716,8 +735,5 @@ fun ensureConsistentJvmSuffix(
 }
 
 private fun Project.appliesJavaGradlePluginPlugin() = pluginManager.hasPlugin("java-gradle-plugin")
-
-private const val ANDROID_GIT_URL =
-    "scm:git:https://android.googlesource.com/platform/frameworks/support"
 
 internal const val KMP_ANCHOR_PUBLICATION_NAME = "androidxKmp"

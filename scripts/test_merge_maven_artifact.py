@@ -435,8 +435,71 @@ class MergeMavenArtifactTest(unittest.TestCase):
                 SOURCE_PROVENANCE,
             )
             persisted = read_json(fixture.report)
+            self.assertEqual(
+                set(persisted),
+                {
+                    "destination",
+                    "droppedSignatures",
+                    "dryRun",
+                    "equivalentLeafCopies",
+                    "equivalentRootCopies",
+                    "fileManifest",
+                    "inputs",
+                    "modules",
+                    "regeneratedChecksums",
+                    "requirements",
+                    "requirementsSha256",
+                    "sourceProvenance",
+                    "synthesizedFiles",
+                    "versionDirectories",
+                },
+            )
             self.assertEqual(persisted["requirementsSha256"], report.requirements_sha256)
             self.assertEqual(persisted["sourceProvenance"], report.source_provenance)
+            self.assertEqual(persisted["fileManifest"], report.file_manifest)
+            self.assertEqual(list(report.file_manifest), sorted(report.file_manifest))
+            self.assertTrue(report.file_manifest)
+            for relative, entry in report.file_manifest.items():
+                self.assertEqual(set(entry), {"size", "sha256"})
+                self.assertGreater(entry["size"], 0, relative)
+                self.assertRegex(entry["sha256"], r"^[0-9a-f]{64}$")
+
+    def test_file_manifest_detects_tampering_and_extra_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = Path(temporary)
+            second = repository / "z" / "second.jar"
+            first = repository / "a" / "first.pom"
+            second.parent.mkdir()
+            first.parent.mkdir()
+            second.write_bytes(b"second")
+            first.write_bytes(b"first")
+
+            original = MERGER.repository_file_manifest(repository)
+            self.assertEqual(list(original), ["a/first.pom", "z/second.jar"])
+            self.assertEqual(
+                original["a/first.pom"],
+                {"size": 5, "sha256": digest(b"first", "sha256")},
+            )
+
+            first.write_bytes(b"FIRST")
+            tampered = MERGER.repository_file_manifest(repository)
+            self.assertEqual(tampered["a/first.pom"]["size"], 5)
+            self.assertNotEqual(
+                tampered["a/first.pom"]["sha256"],
+                original["a/first.pom"]["sha256"],
+            )
+
+            extra = repository / "a" / "unexpected.txt"
+            extra.write_bytes(b"extra")
+            with_extra = MERGER.repository_file_manifest(repository)
+            self.assertEqual(
+                set(with_extra) - set(tampered),
+                {"a/unexpected.txt"},
+            )
+
+            extra.write_bytes(b"")
+            with self.assertRaisesRegex(MERGER.MergeError, "staged file is empty"):
+                MERGER.repository_file_manifest(repository)
 
     def test_rejects_missing_or_extra_provenance_without_installing(self) -> None:
         for condition in ("missing-directory", "missing-marker", "extra-marker", "extra-root"):
@@ -555,6 +618,19 @@ class MergeMavenArtifactTest(unittest.TestCase):
             unrelated = fixture.destination / "unrelated.txt"
             unrelated.write_text("keep", encoding="utf-8")
             report = MERGER.run(fixture.args(dry_run=False))
+
+            installed_manifest = {}
+            for relative_directory in report.version_directories:
+                directory = fixture.destination / relative_directory
+                for path in directory.rglob("*"):
+                    if path.is_file():
+                        relative = path.relative_to(fixture.destination).as_posix()
+                        payload = path.read_bytes()
+                        installed_manifest[relative] = {
+                            "size": len(payload),
+                            "sha256": digest(payload, "sha256"),
+                        }
+            self.assertEqual(report.file_manifest, dict(sorted(installed_manifest.items())))
 
             root = version_dir(fixture.destination, MODULE)
             root_module = root / f"{MODULE}-{VERSION}.module"

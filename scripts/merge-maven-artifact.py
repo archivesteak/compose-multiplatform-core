@@ -153,6 +153,7 @@ class Report:
     requirements: str
     requirements_sha256: str
     source_provenance: dict[str, dict[str, Any]]
+    file_manifest: dict[str, dict[str, Any]] = field(default_factory=dict)
     modules: list[dict[str, Any]] = field(default_factory=list)
     version_directories: set[str] = field(default_factory=set)
     synthesized_files: list[str] = field(default_factory=list)
@@ -169,6 +170,7 @@ class Report:
             "requirements": self.requirements,
             "requirementsSha256": self.requirements_sha256,
             "sourceProvenance": self.source_provenance,
+            "fileManifest": self.file_manifest,
             "modules": self.modules,
             "versionDirectories": sorted(self.version_directories),
             "synthesizedFiles": sorted(self.synthesized_files),
@@ -235,6 +237,37 @@ def sha256_file(path: Path, description: str) -> str:
         return hashlib.sha256(path.read_bytes()).hexdigest()
     except OSError as error:
         raise MergeError(f"cannot hash {description} {path}: {error}") from error
+
+
+def repository_file_manifest(repository: Path) -> dict[str, dict[str, Any]]:
+    """Return an exact, deterministic content manifest for a staged repository."""
+    repository = repository.resolve()
+    manifest: dict[str, dict[str, Any]] = {}
+    entries = sorted(
+        repository.rglob("*"),
+        key=lambda path: path.relative_to(repository).as_posix(),
+    )
+    for path in entries:
+        relative = path.relative_to(repository).as_posix()
+        if path.is_symlink():
+            raise MergeError(f"staged repository contains a symlink: {relative}")
+        if path.is_dir():
+            continue
+        if not path.is_file():
+            raise MergeError(f"staged repository contains a non-regular file: {relative}")
+        try:
+            size = 0
+            digest = hashlib.sha256()
+            with path.open("rb") as stream:
+                while chunk := stream.read(1024 * 1024):
+                    size += len(chunk)
+                    digest.update(chunk)
+        except OSError as error:
+            raise MergeError(f"cannot manifest staged file {path}: {error}") from error
+        if size == 0:
+            raise MergeError(f"staged file is empty: {path}")
+        manifest[relative] = {"size": size, "sha256": digest.hexdigest()}
+    return manifest
 
 
 def validate_commit_sha(value: Any, context: str) -> str:
@@ -1136,6 +1169,7 @@ class Assembler:
                 self.stage_pom_only(requirement)
         self.regenerate_checksums()
         self.validate_stage()
+        self.report.file_manifest = repository_file_manifest(self.stage)
 
     def stage_pom_only(
         self,

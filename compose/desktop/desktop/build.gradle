@@ -69,6 +69,7 @@ tasks.findByName("jvmTest").configure {
 
 androidx {
     name = "Compose Desktop"
+    description = "Compose Multiplatform APIs and runtime integration for desktop applications"
     type = SoftwareType.PUBLISHED_LIBRARY_ONLY_USED_BY_KOTLIN_CONSUMERS
     inceptionYear = "2020"
     legacyDisableKotlinStrictApiMode = true

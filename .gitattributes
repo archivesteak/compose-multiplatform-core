@@ -1,0 +1,2 @@
+buildSrc/private/src/main/resources/maven-central-javadoc/README.md text eol=lf
+buildSrc/allowedLicenses/**/LICENSE.txt text eol=lf
