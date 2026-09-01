@@ -384,6 +384,8 @@ jobs:
             --coordinate io.github.archivesteak.skiko:skiko-skottie:0.151.0-alpha04-mingw \
             --target linuxX64=.klib \
             --target linuxArm64=.klib \
+            --require-klib-linker-option linuxX64=-lfontconfig \
+            --require-klib-linker-option linuxArm64=-lfontconfig \
             --forbid-root-variant-prefix mingwX64
 
       # -mac,-windows keep Apple and mingwX64 targets out: Apple belongs to publish-apple.yml, and

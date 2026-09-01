@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shlex
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,12 @@ def parse_args() -> argparse.Namespace:
         action="append",
         default=[],
         help="Fail when any root variant starts with this prefix (repeatable)",
+    )
+    parser.add_argument(
+        "--require-klib-linker-option",
+        action="append",
+        default=[],
+        help="Require target KLIB metadata to carry target=linker-option (repeatable)",
     )
     return parser.parse_args()
 
@@ -91,6 +98,22 @@ def verify_archive(path: Path) -> None:
         raise ValueError(f"{path} is not a populated Android AAR")
 
 
+def klib_linker_options(paths: list[Path]) -> set[str]:
+    options: set[str] = set()
+    for path in paths:
+        if path.suffix != ".klib":
+            continue
+        with zipfile.ZipFile(path) as archive:
+            manifest = archive.read("default/manifest").decode("utf-8")
+        fields = dict(
+            line.split("=", 1)
+            for line in manifest.splitlines()
+            if "=" in line
+        )
+        options.update(shlex.split(fields.get("linkerOpts", "")))
+    return options
+
+
 def main() -> None:
     args = parse_args()
     repository = args.repository.resolve()
@@ -101,6 +124,14 @@ def main() -> None:
         raise ValueError("duplicate --target values are not allowed")
     if any(not suffix.startswith(".") for suffix in targets.values()):
         raise ValueError("every target suffix must start with '.'")
+    required_linker_options: dict[str, set[str]] = {}
+    for value in args.require_klib_linker_option:
+        target, option = split_exact(value, "=", 2, "KLIB linker option")
+        if target not in targets:
+            raise ValueError(
+                f"KLIB linker option target {target!r} has no matching --target"
+            )
+        required_linker_options.setdefault(target, set()).add(option)
     if len(set(args.coordinate)) != len(args.coordinate):
         raise ValueError("duplicate --coordinate values are not allowed")
 
@@ -195,6 +226,15 @@ def main() -> None:
                 if not isinstance(declared_sha256, str) or sha256(path) != declared_sha256:
                     raise ValueError(f"declared SHA-256 does not match {path}")
                 verify_archive(path)
+            required_options = required_linker_options.get(target, set())
+            if required_options:
+                actual_options = klib_linker_options(list(files))
+                missing_options = sorted(required_options - actual_options)
+                if missing_options:
+                    raise ValueError(
+                        f"{target_module_path} KLIBs lack required linker options: "
+                        + ", ".join(missing_options)
+                    )
             print(
                 f"verified {group}:{artifact}:{version} {variant_name}: "
                 + ", ".join(

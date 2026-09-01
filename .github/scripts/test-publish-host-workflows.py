@@ -153,6 +153,11 @@ class PublishHostWorkflowsTest(unittest.TestCase):
             "skiko/skiko/skiko-skottie/build/publications/kotlinMultiplatform/module.json",
             web,
         )
+        for target in ("linuxX64", "linuxArm64"):
+            self.assertIn(
+                f"--require-klib-linker-option {target}=-lfontconfig",
+                web,
+            )
         for owner, text in texts.items():
             with self.subTest(owner=owner, artifact="skiko-skottie"):
                 self.assertIn("skiko-skottie", text)
