@@ -139,7 +139,37 @@ class VerifyCentralPublicationsTest(unittest.TestCase):
                 javadoc=False,
             )
             (pom.parent / "example-1.0.0-mingw-extra.zip").write_bytes(b"unexpected")
-            self.assert_fails(repository, "packaging=pom publication is not POM-only")
+            self.assert_fails(repository, "packaging=pom publication has unsupported payloads")
+
+    def test_gradle_selector_pom_may_carry_module_metadata_and_documentation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository = pathlib.Path(directory)
+            pom = self.write_publication(
+                repository,
+                artifact="selector",
+                packaging="pom",
+                primary=False,
+            )
+            (pom.parent / "selector-1.0.0-mingw.module").write_text(
+                '{"formatVersion":"1.1","variants":[]}\n',
+                encoding="utf-8",
+            )
+
+            summary = MODULE.verify_repository(repository)
+
+            self.assertEqual(1, summary.pom_only_publications)
+
+    def test_gradle_selector_documentation_is_still_validated(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository = pathlib.Path(directory)
+            pom = self.write_publication(
+                repository,
+                artifact="selector",
+                packaging="pom",
+                primary=False,
+            )
+            (pom.parent / "selector-1.0.0-mingw-javadoc.jar").write_bytes(b"broken")
+            self.assert_fails(repository, "is not a valid ZIP archive")
 
     def test_required_metadata_and_full_scm_triple_are_enforced(self) -> None:
         replacements = {

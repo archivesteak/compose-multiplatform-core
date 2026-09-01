@@ -217,18 +217,31 @@ def verify_repository(
 
         if packaging == "pom":
             pom_only_publications += 1
+            # Gradle platform/selector publications legitimately use Maven's POM packaging while
+            # carrying Gradle Module Metadata. Gradle publishes the .module file alongside the POM,
+            # and a shared publication convention may also attach sources/javadoc classifiers.
+            # They still must not contain an unclassified binary or arbitrary extra payload.
+            allowed = {
+                pom_path.name,
+                f"{base_name}.module",
+                f"{base_name}-sources.jar",
+                f"{base_name}-javadoc.jar",
+            }
             unexpected = sorted(
                 path.name
                 for path in pom_path.parent.iterdir()
                 if path.is_file()
                 and _underlying_payload_name(path.name).startswith(base_name)
-                and _underlying_payload_name(path.name) != pom_path.name
+                and _underlying_payload_name(path.name) not in allowed
             )
             if unexpected:
                 issues.append(
-                    f"{label}: packaging=pom publication is not POM-only: "
+                    f"{label}: packaging=pom publication has unsupported payloads: "
                     + ", ".join(unexpected)
                 )
+            for documentation in (sources, javadoc):
+                if documentation.is_file():
+                    _check_zip_archive(documentation, label, issues)
             continue
 
         binary_publications += 1
