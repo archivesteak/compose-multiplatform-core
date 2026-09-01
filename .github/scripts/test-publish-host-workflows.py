@@ -118,6 +118,24 @@ class PublishHostWorkflowsTest(unittest.TestCase):
         )
         self.assertNotIn("test -s compose/ui/ui/build/", verification)
 
+    def test_navigationevent_platform_modules_are_allowed_by_family_guards(self) -> None:
+        texts = self.texts()
+        for owner in ("apple", "web"):
+            with self.subTest(owner=owner):
+                self.assertIn("! -name 'navigationevent-compose-*'", texts[owner])
+                self.assertNotIn(
+                    "-type d ! -name navigationevent-compose -print",
+                    texts[owner],
+                )
+        self.assertIn(
+            ".StartsWith('navigationevent-compose-', [StringComparison]::Ordinal)",
+            texts["windows"],
+        )
+        self.assertNotIn(
+            "Where-Object Name -ne 'navigationevent-compose'",
+            texts["windows"],
+        )
+
     def test_fork_coordinates_and_provenance_contract_match(self) -> None:
         texts = self.texts()
         for owner, text in texts.items():

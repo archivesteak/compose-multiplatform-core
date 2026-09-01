@@ -237,7 +237,10 @@ jobs:
           if ($unexpectedAndroidx) { throw "Unexpected androidx families: $($unexpectedAndroidx.FullName -join ', ')" }
 
           $navigation = Join-Path $androidx 'navigationevent'
-          $unexpectedNavigation = Get-ChildItem -LiteralPath $navigation -Directory | Where-Object Name -ne 'navigationevent-compose'
+          $unexpectedNavigation = Get-ChildItem -LiteralPath $navigation -Directory | Where-Object {
+            $_.Name -ne 'navigationevent-compose' -and
+              -not $_.Name.StartsWith('navigationevent-compose-', [StringComparison]::Ordinal)
+          }
           if ($unexpectedNavigation) { throw "Unexpected navigationevent modules: $($unexpectedNavigation.FullName -join ', ')" }
 
           $required = @(

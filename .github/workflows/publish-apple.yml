@@ -185,7 +185,8 @@ jobs:
             find staging/repository/io/github/archivesteak/androidx -mindepth 1 -maxdepth 1 \
               -type d ! -name navigationevent -print
             find staging/repository/io/github/archivesteak/androidx/navigationevent \
-              -mindepth 1 -maxdepth 1 -type d ! -name navigationevent-compose -print
+              -mindepth 1 -maxdepth 1 -type d \
+              ! -name navigationevent-compose ! -name 'navigationevent-compose-*' -print
           )
           if [ -n "$unexpected" ]; then
             echo "Unexpected library families in scoped artifact:"
