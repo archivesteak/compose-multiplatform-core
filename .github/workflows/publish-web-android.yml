@@ -400,11 +400,14 @@ jobs:
             :compose:ui:ui:fetchSkikoWasmRuntime \
             :compose:mpp:demo:compileKotlinJs \
             :compose:mpp:demo:compileKotlinWasmJs
-          test -s compose/ui/ui/build/resources/skiko-js/skiko.mjs
-          test -s compose/ui/ui/build/resources/skiko-js/skiko.wasm
-          test -s compose/ui/ui/build/resources/skiko-js/js-skiko-reexport-symbols.mjs
-          test -s compose/ui/ui/build/resources/skiko-wasm/skiko.mjs
-          test -s compose/ui/ui/build/resources/skiko-wasm/skiko.wasm
+          # out-setup.groovy relocates every project build directory under
+          # out/<rootProject.name>/<project.path>/build.
+          runtime_resources=out/compose-multiplatform-core/compose/ui/ui/build/resources
+          test -s "$runtime_resources/skiko-js/skiko.mjs"
+          test -s "$runtime_resources/skiko-js/skiko.wasm"
+          test -s "$runtime_resources/skiko-js/js-skiko-reexport-symbols.mjs"
+          test -s "$runtime_resources/skiko-wasm/skiko.mjs"
+          test -s "$runtime_resources/skiko-wasm/skiko.wasm"
 
       # Ship only this fork's own coordinates, same reasoning as publish-apple.yml.
       - name: Collect the published artifacts

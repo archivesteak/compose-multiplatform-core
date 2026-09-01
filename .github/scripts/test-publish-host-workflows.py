@@ -112,6 +112,11 @@ class PublishHostWorkflowsTest(unittest.TestCase):
         self.assertIn("--no-parallel", verification)
         self.assertIn("--no-configuration-cache", verification)
         self.assertIn("--no-configure-on-demand", verification)
+        self.assertIn(
+            "runtime_resources=out/compose-multiplatform-core/compose/ui/ui/build/resources",
+            verification,
+        )
+        self.assertNotIn("test -s compose/ui/ui/build/", verification)
 
     def test_fork_coordinates_and_provenance_contract_match(self) -> None:
         texts = self.texts()
