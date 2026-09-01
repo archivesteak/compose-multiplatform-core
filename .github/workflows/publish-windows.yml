@@ -226,8 +226,8 @@ jobs:
             "skiko-skottie-awt-runtime-windows-x64"
           )) {
             $directory = Join-Path $env:MAVEN_REPOSITORY "io\github\archivesteak\skiko\$artifact\$version"
-            $jar = Get-ChildItem -LiteralPath $directory -Filter '*.jar' | Where-Object Length -gt 0
-            if ($jar.Count -ne 1) { throw "Expected one nonempty runtime jar in $directory" }
+            $jar = Get-Item -LiteralPath (Join-Path $directory "$artifact-$version.jar") -ErrorAction SilentlyContinue
+            if ($null -eq $jar -or $jar.Length -le 0) { throw "Expected the nonempty main runtime jar in $directory" }
           }
 
       - name: Publish the exact Compose Windows consumer closure

@@ -118,6 +118,8 @@ class PublishHostWorkflowsTest(unittest.TestCase):
         self.assertIn("--include-konan-target mingw_x64", mingw)
         self.assertNotIn(":skiko-skottie:", mingw)
         self.assertIn("skiko-awt-runtime-angle-windows-x64", windows)
+        self.assertIn('Join-Path $directory "$artifact-$version.jar"', windows)
+        self.assertNotIn("-Filter '*.jar'", windows)
         web = texts["web"]
         web_targets = web.split(
             "- name: Build and publish skiko (js + wasmJs + Android)", 1
