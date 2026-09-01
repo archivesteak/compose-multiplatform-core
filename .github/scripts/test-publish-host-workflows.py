@@ -74,7 +74,7 @@ class PublishHostWorkflowsTest(unittest.TestCase):
     def test_windows_quotes_gradle_project_properties_for_powershell(self) -> None:
         windows = self.texts()["windows"]
         publish = windows.split(
-            "- name: Publish Skiko for desktop JVM and mingwX64", 1
+            "- name: Publish Skiko for desktop JVM", 1
         )[1].split("- name: Verify Skiko Windows publications", 1)[0]
         for argument in (
             "deploy.release=true",
@@ -88,11 +88,36 @@ class PublishHostWorkflowsTest(unittest.TestCase):
 
     def test_skiko_scope_and_linux_common_metadata_fix_are_explicit(self) -> None:
         texts = self.texts()
-        for owner in ("apple", "windows"):
-            text = texts[owner]
-            with self.subTest(owner=owner):
-                self.assertIn(":publishToMavenLocal", text)
-                self.assertIn(":skiko-skottie:publishToMavenLocal", text)
+        apple = texts["apple"]
+        self.assertIn(":publishToMavenLocal", apple)
+        self.assertIn(":skiko-skottie:publishToMavenLocal", apple)
+
+        windows = texts["windows"]
+        awt = windows.split("- name: Publish Skiko for desktop JVM", 1)[1].split(
+            "- name: Publish Skiko for mingwX64 and merge root metadata", 1
+        )[0]
+        mingw = windows.split(
+            "- name: Publish Skiko for mingwX64 and merge root metadata", 1
+        )[1].split("- name: Verify Skiko Windows publications", 1)[0]
+        for task in (
+            "publishKotlinMultiplatformPublicationToMavenLocal",
+            "publishAwtPublicationToMavenLocal",
+            "publishAwtRuntimeElementsPublicationToMavenLocal",
+            "publishSkikoJvmRuntimeWindowsX64PublicationToMavenLocal",
+        ):
+            self.assertIn(f":{task}", awt)
+            self.assertIn(f":skiko-skottie:{task}", awt)
+        self.assertNotIn("skia.dir", awt)
+        self.assertNotIn(":publishToMavenLocal", awt)
+        self.assertIn(":publishMingwX64PublicationToMavenLocal", mingw)
+        self.assertIn(":generateMetadataFileForKotlinMultiplatformPublication", mingw)
+        self.assertIn(":buildKotlinToolingMetadata", mingw)
+        self.assertIn("-Pskia.dir=", mingw)
+        self.assertIn("--include-variant mingwX64ApiElements-published", mingw)
+        self.assertIn("--include-variant mingwX64SourcesElements-published", mingw)
+        self.assertIn("--include-konan-target mingw_x64", mingw)
+        self.assertNotIn(":skiko-skottie:", mingw)
+        self.assertIn("skiko-awt-runtime-angle-windows-x64", windows)
         web = texts["web"]
         web_targets = web.split(
             "- name: Build and publish skiko (js + wasmJs + Android)", 1

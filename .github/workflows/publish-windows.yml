@@ -127,8 +127,6 @@ jobs:
           printf '%s  %s\n' "$WINLIBS_SHA256" winlibs.7z | sha256sum --check --strict
           mkdir -p toolchains
           7z x -y -otoolchains winlibs.7z
-          toolchain_bin=$(cygpath -w "$PWD/toolchains/mingw64/bin")
-          printf '%s\n' "$toolchain_bin" >> "$GITHUB_PATH"
           ./toolchains/mingw64/bin/clang.exe --version
           grep -F -- "- LLVM/Clang/LLD/LLDB 19.1.7" toolchains/mingw64/version_info.txt
           grep -F -- "- MinGW-w64 12.0.0 (linked with ucrt)" toolchains/mingw64/version_info.txt
@@ -139,14 +137,46 @@ jobs:
           export PATH="$PWD/toolchains/mingw64/bin:$PATH"
           bash release-contract/.github/scripts/build-skia-mingw.sh skia
 
-      - name: Publish Skiko for desktop JVM and mingwX64
+      # skia.dir is a source-tree override for every enabled Skiko ABI. A MinGW Skia tree contains
+      # GNU archives, while the desktop JVM runtime requires the official MSVC/COFF Skia payload.
+      # Publish those two ABI closures separately, then union only the MinGW root metadata below.
+      - name: Publish Skiko for desktop JVM
         shell: pwsh
         run: |
           $repository = (New-Item -ItemType Directory -Force $env:MAVEN_REPOSITORY).FullName
-          $skia = (Resolve-Path skia).Path
           Push-Location skiko\skiko
           try {
-            .\gradlew.bat --no-daemon --stacktrace `
+            .\gradlew.bat --no-daemon --stacktrace --no-configuration-cache --console=plain `
+              "-Dmaven.repo.local=$repository" `
+              "-Pdeploy.release=true" `
+              "-Pskiko.native.enabled=false" `
+              "-Pskiko.native.mingw.enabled=false" `
+              "-Pskiko.awt.enabled=true" `
+              "-Pskiko.wasm.enabled=false" `
+              "-Pskiko.android.enabled=false" `
+              :publishKotlinMultiplatformPublicationToMavenLocal `
+              :publishAwtPublicationToMavenLocal `
+              :publishAwtRuntimeElementsPublicationToMavenLocal `
+              :publishSkikoJvmRuntimeWindowsX64PublicationToMavenLocal `
+              :skiko-skottie:publishKotlinMultiplatformPublicationToMavenLocal `
+              :skiko-skottie:publishAwtPublicationToMavenLocal `
+              :skiko-skottie:publishAwtRuntimeElementsPublicationToMavenLocal `
+              :skiko-skottie:publishSkikoJvmRuntimeWindowsX64PublicationToMavenLocal
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            Pop-Location
+          }
+
+      - name: Publish Skiko for mingwX64 and merge root metadata
+        shell: pwsh
+        run: |
+          $repository = (Resolve-Path $env:MAVEN_REPOSITORY).Path
+          $skia = (Resolve-Path skia).Path
+          $toolchain = (Resolve-Path toolchains\mingw64\bin).Path
+          $env:Path = "$toolchain;$env:Path"
+          Push-Location skiko\skiko
+          try {
+            .\gradlew.bat --no-daemon --stacktrace --no-configuration-cache --console=plain --rerun-tasks `
               "-Dmaven.repo.local=$repository" `
               "-Pdeploy.release=true" `
               "-Pskiko.native.enabled=false" `
@@ -155,12 +185,23 @@ jobs:
               "-Pskiko.wasm.enabled=false" `
               "-Pskiko.android.enabled=false" `
               "-Pskia.dir=$skia" `
-              :publishToMavenLocal `
-              :skiko-skottie:publishToMavenLocal
+              :publishMingwX64PublicationToMavenLocal `
+              :generateMetadataFileForKotlinMultiplatformPublication `
+              :buildKotlinToolingMetadata
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           } finally {
             Pop-Location
           }
+
+          python release-contract/.github/scripts/merge-gradle-module-metadata.py `
+            skiko\skiko\build\publications\kotlinMultiplatform\module.json `
+            $repository `
+            --source-tooling-metadata skiko\skiko\build\kotlinToolingMetadata\kotlin-tooling-metadata.json `
+            --include-variant mingwX64ApiElements-published `
+            --include-variant mingwX64SourcesElements-published `
+            --require-variant mingwX64ApiElements-published `
+            --include-konan-target mingw_x64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify Skiko Windows publications
         shell: pwsh
@@ -215,11 +256,15 @@ jobs:
 
           # The host-specific fat jar collides by coordinate across producer shards. Consumers
           # select the per-OS jars, so omit the misleading runtime-all publication.
-          $excludedFatRuntimes = @(
+          # The main Windows runtime build also materializes Skiko's optional standalone ANGLE
+          # package. No published selector or dependency in this release points to it, so keep the
+          # artifact-only shard limited to the declared consumer closure.
+          $excludedSkikoPublications = @(
             (Join-Path $staging 'io\github\archivesteak\skiko\skiko-awt-runtime-all'),
-            (Join-Path $staging 'io\github\archivesteak\skiko\skiko-skottie-awt-runtime-all')
+            (Join-Path $staging 'io\github\archivesteak\skiko\skiko-skottie-awt-runtime-all'),
+            (Join-Path $staging 'io\github\archivesteak\skiko\skiko-awt-runtime-angle-windows-x64')
           )
-          Remove-Item -LiteralPath $excludedFatRuntimes -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath $excludedSkikoPublications -Recurse -Force -ErrorAction SilentlyContinue
 
           python release-contract/.github/scripts/write-provenance.py `
             --owner windows `
