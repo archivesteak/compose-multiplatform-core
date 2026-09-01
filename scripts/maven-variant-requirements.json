@@ -33,15 +33,15 @@
     "windows": {
       "compose": "bfefb96bdc1b50f2fcc540dce8eea742dc5982cf",
       "skia": "343b3b3b03072992df41ef46c3d8e78ef7a5792e",
-      "skiko": "73e4b5ef52f42728787d060007774166962cc668"
+      "skiko": "0adbc7a2d3365d902d51b2c0e7940d15a11a35d3"
     },
     "apple": {
       "compose": "bfefb96bdc1b50f2fcc540dce8eea742dc5982cf",
-      "skiko": "73e4b5ef52f42728787d060007774166962cc668"
+      "skiko": "0adbc7a2d3365d902d51b2c0e7940d15a11a35d3"
     },
     "web": {
       "compose": "bfefb96bdc1b50f2fcc540dce8eea742dc5982cf",
-      "skiko": "73e4b5ef52f42728787d060007774166962cc668"
+      "skiko": "0adbc7a2d3365d902d51b2c0e7940d15a11a35d3"
     }
   },
   "pomOnlyModules": [
