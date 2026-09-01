@@ -147,7 +147,8 @@ jobs:
               -Pskiko.wasm.enabled=false `
               -Pskiko.android.enabled=false `
               "-Pskia.dir=$skia" `
-              :publishToMavenLocal
+              :publishToMavenLocal `
+              :skiko-skottie:publishToMavenLocal
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           } finally {
             Pop-Location
@@ -163,8 +164,18 @@ jobs:
             --target mingwX64=.klib
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+          python compose-multiplatform-core/.github/scripts/verify-maven-kmp-publications.py `
+            $env:MAVEN_REPOSITORY `
+            --coordinate io.github.archivesteak.skiko:skiko-skottie:0.151.0-alpha04-mingw `
+            --target awt=.jar `
+            --forbid-root-variant-prefix mingwX64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
           $version = "0.151.0-alpha04-mingw"
-          foreach ($artifact in @("skiko-awt-runtime-windows-x64")) {
+          foreach ($artifact in @(
+            "skiko-awt-runtime-windows-x64",
+            "skiko-skottie-awt-runtime-windows-x64"
+          )) {
             $directory = Join-Path $env:MAVEN_REPOSITORY "io\github\archivesteak\skiko\$artifact\$version"
             $jar = Get-ChildItem -LiteralPath $directory -Filter '*.jar' | Where-Object Length -gt 0
             if ($jar.Count -ne 1) { throw "Expected one nonempty runtime jar in $directory" }
@@ -197,7 +208,8 @@ jobs:
           # The host-specific fat jar collides by coordinate across producer shards. Consumers
           # select the per-OS jars, so omit the misleading runtime-all publication.
           $excludedFatRuntimes = @(
-            (Join-Path $staging 'io\github\archivesteak\skiko\skiko-awt-runtime-all')
+            (Join-Path $staging 'io\github\archivesteak\skiko\skiko-awt-runtime-all'),
+            (Join-Path $staging 'io\github\archivesteak\skiko\skiko-skottie-awt-runtime-all')
           )
           Remove-Item -LiteralPath $excludedFatRuntimes -Recurse -Force -ErrorAction SilentlyContinue
 

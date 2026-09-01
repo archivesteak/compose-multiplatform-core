@@ -54,7 +54,15 @@
       "owner": "windows"
     },
     {
+      "coordinate": "io.github.archivesteak.skiko:skiko-skottie-awt-runtime-windows-x64:0.151.0-alpha04-mingw",
+      "owner": "windows"
+    },
+    {
       "coordinate": "io.github.archivesteak.skiko:skiko-awt-runtime-macos-x64:0.151.0-alpha04-mingw",
+      "owner": "apple"
+    },
+    {
+      "coordinate": "io.github.archivesteak.skiko:skiko-skottie-awt-runtime-macos-x64:0.151.0-alpha04-mingw",
       "owner": "apple"
     },
     {
@@ -62,7 +70,15 @@
       "owner": "apple"
     },
     {
+      "coordinate": "io.github.archivesteak.skiko:skiko-skottie-awt-runtime-macos-arm64:0.151.0-alpha04-mingw",
+      "owner": "apple"
+    },
+    {
       "coordinate": "io.github.archivesteak.skiko:skiko-awt-runtime-linux-x64:0.151.0-alpha04-mingw",
+      "owner": "web"
+    },
+    {
+      "coordinate": "io.github.archivesteak.skiko:skiko-skottie-awt-runtime-linux-x64:0.151.0-alpha04-mingw",
       "owner": "web"
     }
   ],
@@ -141,6 +157,77 @@
         "android": "skiko-android",
         "linuxX64": "skiko-linuxx64",
         "linuxArm64": "skiko-linuxarm64"
+      }
+    },
+    {
+      "coordinate": "io.github.archivesteak.skiko:skiko-skottie:0.151.0-alpha04-mingw",
+      "requiredVariants": {
+        "common": [
+          "metadataApiElements",
+          "metadataSourcesElements"
+        ],
+        "jvm": [
+          "awtApiElements-published",
+          "awtRuntimeElements-published",
+          "awtSourcesElements-published"
+        ],
+        "macosX64": [
+          "macosX64ApiElements-published",
+          "macosX64SourcesElements-published",
+          "macosX64MetadataElements-published"
+        ],
+        "macosArm64": [
+          "macosArm64ApiElements-published",
+          "macosArm64SourcesElements-published",
+          "macosArm64MetadataElements-published"
+        ],
+        "iosArm64": [
+          "iosArm64ApiElements-published",
+          "iosArm64SourcesElements-published",
+          "iosArm64MetadataElements-published"
+        ],
+        "iosSimulatorArm64": [
+          "iosSimulatorArm64ApiElements-published",
+          "iosSimulatorArm64SourcesElements-published",
+          "iosSimulatorArm64MetadataElements-published"
+        ],
+        "js": [
+          "jsApiElements-published",
+          "jsRuntimeElements-published",
+          "jsSourcesElements-published",
+          "skikoWasmRuntimeElementsForJs"
+        ],
+        "wasmJs": [
+          "wasmJsApiElements-published",
+          "wasmJsRuntimeElements-published",
+          "wasmJsSourcesElements-published",
+          "skikoWasmRuntimeElementsForWasmJs"
+        ],
+        "android": [
+          "androidApiElements-published",
+          "androidRuntimeElements-published",
+          "androidSourcesElements-published"
+        ],
+        "linuxX64": [
+          "linuxX64ApiElements-published",
+          "linuxX64SourcesElements-published"
+        ],
+        "linuxArm64": [
+          "linuxArm64ApiElements-published",
+          "linuxArm64SourcesElements-published"
+        ]
+      },
+      "targetModules": {
+        "jvm": "skiko-skottie-awt",
+        "macosX64": "skiko-skottie-macosx64",
+        "macosArm64": "skiko-skottie-macosarm64",
+        "iosArm64": "skiko-skottie-iosarm64",
+        "iosSimulatorArm64": "skiko-skottie-iossimulatorarm64",
+        "js": "skiko-skottie-js",
+        "wasmJs": "skiko-skottie-wasm-js",
+        "android": "skiko-skottie-android",
+        "linuxX64": "skiko-skottie-linuxx64",
+        "linuxArm64": "skiko-skottie-linuxarm64"
       }
     },
     {

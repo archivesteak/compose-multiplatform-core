@@ -129,6 +129,12 @@ jobs:
             :publishWasmJsPublicationToMavenLocal \
             :publishSkikoJvmRuntimeAndroidX64PublicationToMavenLocal \
             :publishSkikoJvmRuntimeAndroidArm64PublicationToMavenLocal \
+            :skiko-skottie:publishKotlinMultiplatformPublicationToMavenLocal \
+            :skiko-skottie:publishAndroidPublicationToMavenLocal \
+            :skiko-skottie:publishJsPublicationToMavenLocal \
+            :skiko-skottie:publishWasmJsPublicationToMavenLocal \
+            :skiko-skottie:publishSkikoJvmRuntimeAndroidX64PublicationToMavenLocal \
+            :skiko-skottie:publishSkikoJvmRuntimeAndroidArm64PublicationToMavenLocal \
             -Dmaven.repo.local="$MAVEN_REPOSITORY" \
             -Pdeploy.release=true \
             -Pskiko.wasm.enabled=true \
@@ -141,6 +147,7 @@ jobs:
           python3 compose-multiplatform-core/.github/scripts/verify-maven-kmp-publications.py \
             "$MAVEN_REPOSITORY" \
             --coordinate io.github.archivesteak.skiko:skiko:0.151.0-alpha04-mingw \
+            --coordinate io.github.archivesteak.skiko:skiko-skottie:0.151.0-alpha04-mingw \
             --target android=.aar \
             --target js=.klib \
             --target wasmJs=.klib \
@@ -237,10 +244,16 @@ jobs:
                 -Pdeploy.release=true \
                 -Pskiko.native.enabled=true \
                 -Pskiko.awt.enabled=true \
-                publishLinuxArm64PublicationToMavenLocal \
-                publishLinuxX64PublicationToMavenLocal \
-                generateMetadataFileForKotlinMultiplatformPublication \
-                buildKotlinToolingMetadata
+                :publishLinuxArm64PublicationToMavenLocal \
+                :publishLinuxX64PublicationToMavenLocal \
+                :publishSkikoJvmRuntimeLinuxX64PublicationToMavenLocal \
+                :generateMetadataFileForKotlinMultiplatformPublication \
+                :buildKotlinToolingMetadata \
+                :skiko-skottie:publishLinuxArm64PublicationToMavenLocal \
+                :skiko-skottie:publishLinuxX64PublicationToMavenLocal \
+                :skiko-skottie:publishSkikoJvmRuntimeLinuxX64PublicationToMavenLocal \
+                :skiko-skottie:generateMetadataFileForKotlinMultiplatformPublication \
+                :skiko-skottie:buildKotlinToolingMetadata
             '
 
       # A target-only Gradle publication intentionally does not rewrite the root KMP descriptor.
@@ -252,6 +265,19 @@ jobs:
             skiko/skiko/build/publications/kotlinMultiplatform/module.json \
             "$MAVEN_REPOSITORY" \
             --source-tooling-metadata skiko/skiko/build/kotlinToolingMetadata/kotlin-tooling-metadata.json \
+            --include-variant linuxX64ApiElements-published \
+            --include-variant linuxX64SourcesElements-published \
+            --include-variant linuxArm64ApiElements-published \
+            --include-variant linuxArm64SourcesElements-published \
+            --require-variant linuxX64ApiElements-published \
+            --require-variant linuxArm64ApiElements-published \
+            --include-konan-target linux_x64 \
+            --include-konan-target linux_arm64
+
+          python3 compose-multiplatform-core/.github/scripts/merge-gradle-module-metadata.py \
+            skiko/skiko/skiko-skottie/build/publications/kotlinMultiplatform/module.json \
+            "$MAVEN_REPOSITORY" \
+            --source-tooling-metadata skiko/skiko/skiko-skottie/build/kotlinToolingMetadata/kotlin-tooling-metadata.json \
             --include-variant linuxX64ApiElements-published \
             --include-variant linuxX64SourcesElements-published \
             --include-variant linuxArm64ApiElements-published \
@@ -340,6 +366,14 @@ jobs:
               print(f"verified {variant_name}: {klibs[0]} ({klibs[0].stat().st_size} bytes)")
           PY
 
+          python3 compose-multiplatform-core/.github/scripts/verify-maven-kmp-publications.py \
+            "$MAVEN_REPOSITORY" \
+            --coordinate io.github.archivesteak.skiko:skiko:0.151.0-alpha04-mingw \
+            --coordinate io.github.archivesteak.skiko:skiko-skottie:0.151.0-alpha04-mingw \
+            --target linuxX64=.klib \
+            --target linuxArm64=.klib \
+            --forbid-root-variant-prefix mingwX64
+
       # -mac,-windows keep Apple and mingwX64 targets out: Apple belongs to publish-apple.yml, and
       # mingwX64 would demand the hand-built GNU-ABI Skia that only exists on the Windows machine.
       - name: Build and publish the Compose fork (js, wasmJs, android)
@@ -386,6 +420,7 @@ jobs:
           # be union-merged. Consumers use the per-OS artifacts; omit the misleading fat jars.
           rsync -a \
             --exclude='skiko/skiko-awt-runtime-all/' \
+            --exclude='skiko/skiko-skottie-awt-runtime-all/' \
             "$MAVEN_REPOSITORY/io/github/archivesteak/" \
             staging/repository/io/github/archivesteak/
           # Normalize the configured-all/published-subset Gradle descriptors before verification;
@@ -411,7 +446,9 @@ jobs:
             exit 1
           fi
           test ! -e staging/repository/io/github/archivesteak/skiko/skiko-awt-runtime-all
+          test ! -e staging/repository/io/github/archivesteak/skiko/skiko-skottie-awt-runtime-all
           test -n "$(find staging/repository/io/github/archivesteak/skiko/skiko-awt-runtime-linux-x64 -name '*.jar' -size +0c -print -quit)"
+          test -n "$(find staging/repository/io/github/archivesteak/skiko/skiko-skottie-awt-runtime-linux-x64 -name '*.jar' -size +0c -print -quit)"
           test -f staging/repository/io/github/archivesteak/compose/runtime/runtime/1.12.0-beta02-mingw/runtime-1.12.0-beta02-mingw.module
           test -f staging/repository/io/github/archivesteak/compose/ui/ui-test/1.12.0-beta02-mingw/ui-test-1.12.0-beta02-mingw.module
           test -f staging/repository/io/github/archivesteak/compose/material3/material3/1.12.0-alpha03-mingw/material3-1.12.0-alpha03-mingw.module

@@ -62,6 +62,7 @@ class PublishHostWorkflowsTest(unittest.TestCase):
             text = texts[owner]
             with self.subTest(owner=owner):
                 self.assertIn(":publishToMavenLocal", text)
+                self.assertIn(":skiko-skottie:publishToMavenLocal", text)
         web = texts["web"]
         web_targets = web.split(
             "- name: Build and publish skiko (js + wasmJs + Android)", 1
@@ -80,9 +81,28 @@ class PublishHostWorkflowsTest(unittest.TestCase):
             "SkikoJvmRuntimeAndroidArm64",
         ):
             self.assertIn(f":publish{publication}PublicationToMavenLocal", web_targets)
+            self.assertIn(
+                f":skiko-skottie:publish{publication}PublicationToMavenLocal",
+                web_targets,
+            )
         self.assertIn("-Pskiko.awt.enabled=true", linux_targets)
-        self.assertIn("publishLinuxArm64PublicationToMavenLocal", web)
-        self.assertIn("publishLinuxX64PublicationToMavenLocal", web)
+        for task in (
+            "publishLinuxArm64PublicationToMavenLocal",
+            "publishLinuxX64PublicationToMavenLocal",
+            "publishSkikoJvmRuntimeLinuxX64PublicationToMavenLocal",
+            "generateMetadataFileForKotlinMultiplatformPublication",
+            "buildKotlinToolingMetadata",
+        ):
+            self.assertIn(f":{task}", linux_targets)
+            self.assertIn(f":skiko-skottie:{task}", linux_targets)
+        self.assertIn(
+            "skiko/skiko/skiko-skottie/build/publications/kotlinMultiplatform/module.json",
+            web,
+        )
+        for owner, text in texts.items():
+            with self.subTest(owner=owner, artifact="skiko-skottie"):
+                self.assertIn("skiko-skottie", text)
+                self.assertIn("skiko-skottie-awt-runtime-all", text)
 
     def test_web_runtime_verification_uses_supported_configuration_mode(self) -> None:
         web = self.texts()["web"]

@@ -123,7 +123,9 @@ jobs:
       - name: Build and publish skiko (Apple targets)
         working-directory: skiko/skiko
         run: |
-          ./gradlew --no-daemon :publishToMavenLocal \
+          ./gradlew --no-daemon \
+            :publishToMavenLocal \
+            :skiko-skottie:publishToMavenLocal \
             -Dmaven.repo.local="$MAVEN_REPOSITORY" \
             -Pdeploy.release=true \
             -Pskiko.native.mac.enabled=true \
@@ -136,6 +138,7 @@ jobs:
           python3 compose-multiplatform-core/.github/scripts/verify-maven-kmp-publications.py \
             "$MAVEN_REPOSITORY" \
             --coordinate io.github.archivesteak.skiko:skiko:0.151.0-alpha04-mingw \
+            --coordinate io.github.archivesteak.skiko:skiko-skottie:0.151.0-alpha04-mingw \
             --target macosX64=.klib \
             --target macosArm64=.klib \
             --target iosArm64=.klib \
@@ -167,6 +170,7 @@ jobs:
           # be union-merged. Consumers use the per-OS artifacts; omit the misleading fat jars.
           rsync -a \
             --exclude='skiko/skiko-awt-runtime-all/' \
+            --exclude='skiko/skiko-skottie-awt-runtime-all/' \
             "$MAVEN_REPOSITORY/io/github/archivesteak/" \
             staging/repository/io/github/archivesteak/
           # Root descriptors are generated from every configured target, while this producer
@@ -193,9 +197,12 @@ jobs:
             exit 1
           fi
           test ! -e staging/repository/io/github/archivesteak/skiko/skiko-awt-runtime-all
+          test ! -e staging/repository/io/github/archivesteak/skiko/skiko-skottie-awt-runtime-all
           for runtime in \
             skiko-awt-runtime-macos-arm64 \
-            skiko-awt-runtime-macos-x64; do
+            skiko-awt-runtime-macos-x64 \
+            skiko-skottie-awt-runtime-macos-arm64 \
+            skiko-skottie-awt-runtime-macos-x64; do
             test -n "$(find "staging/repository/io/github/archivesteak/skiko/$runtime" -name '*.jar' -size +0c -print -quit)"
           done
           test -f staging/repository/io/github/archivesteak/compose/runtime/runtime/1.12.0-beta02-mingw/runtime-1.12.0-beta02-mingw.module

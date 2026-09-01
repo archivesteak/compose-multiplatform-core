@@ -1655,7 +1655,7 @@ class MergeMavenArtifactTest(unittest.TestCase):
         modules = {
             MERGER.Coordinate.parse(value["coordinate"]): value for value in manifest["modules"]
         }
-        self.assertEqual(len(modules), 10)
+        self.assertEqual(len(modules), 11)
         self.assertEqual(
             {
                 MERGER.Coordinate.parse(value["coordinate"]): value["owner"]
@@ -1674,7 +1674,17 @@ class MergeMavenArtifactTest(unittest.TestCase):
                 ): "windows",
                 MERGER.Coordinate(
                     "io.github.archivesteak.skiko",
+                    "skiko-skottie-awt-runtime-windows-x64",
+                    "0.151.0-alpha04-mingw",
+                ): "windows",
+                MERGER.Coordinate(
+                    "io.github.archivesteak.skiko",
                     "skiko-awt-runtime-macos-x64",
+                    "0.151.0-alpha04-mingw",
+                ): "apple",
+                MERGER.Coordinate(
+                    "io.github.archivesteak.skiko",
+                    "skiko-skottie-awt-runtime-macos-x64",
                     "0.151.0-alpha04-mingw",
                 ): "apple",
                 MERGER.Coordinate(
@@ -1684,7 +1694,17 @@ class MergeMavenArtifactTest(unittest.TestCase):
                 ): "apple",
                 MERGER.Coordinate(
                     "io.github.archivesteak.skiko",
+                    "skiko-skottie-awt-runtime-macos-arm64",
+                    "0.151.0-alpha04-mingw",
+                ): "apple",
+                MERGER.Coordinate(
+                    "io.github.archivesteak.skiko",
                     "skiko-awt-runtime-linux-x64",
+                    "0.151.0-alpha04-mingw",
+                ): "web",
+                MERGER.Coordinate(
+                    "io.github.archivesteak.skiko",
+                    "skiko-skottie-awt-runtime-linux-x64",
                     "0.151.0-alpha04-mingw",
                 ): "web",
             },
@@ -1702,6 +1722,10 @@ class MergeMavenArtifactTest(unittest.TestCase):
         self.assertEqual(compose_versions, {"1.12.0-beta02-mingw"})
         skiko = next(coordinate for coordinate in modules if coordinate.module == "skiko")
         self.assertEqual(skiko.version, "0.151.0-alpha04-mingw")
+        skottie = next(
+            coordinate for coordinate in modules if coordinate.module == "skiko-skottie"
+        )
+        self.assertEqual(skottie.version, "0.151.0-alpha04-mingw")
         ui_test = next(coordinate for coordinate in modules if coordinate.module == "ui-test")
         navigation_event = next(
             coordinate
@@ -1759,6 +1783,23 @@ class MergeMavenArtifactTest(unittest.TestCase):
         self.assertIn(
             "skikoWasmRuntimeElementsForWasmJs",
             modules[skiko]["requiredVariants"]["wasmJs"],
+        )
+        self.assertNotIn("mingwX64", modules[skottie]["requiredVariants"])
+        self.assertEqual(
+            set(modules[skottie]["requiredVariants"]),
+            {
+                "common",
+                "jvm",
+                "macosX64",
+                "macosArm64",
+                "iosArm64",
+                "iosSimulatorArm64",
+                "js",
+                "wasmJs",
+                "android",
+                "linuxX64",
+                "linuxArm64",
+            },
         )
 
 
